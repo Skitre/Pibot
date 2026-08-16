@@ -106,7 +106,7 @@ export function CreateGroupModal({ bots, onClose, onCreated }: Props) {
 const backdrop: React.CSSProperties = {
   position: "fixed",
   inset: 0,
-  background: "rgba(0,0,0,0.55)",
+  background: "var(--overlay)",
   display: "grid",
   placeItems: "center",
   zIndex: 40,
@@ -171,13 +171,13 @@ const row: React.CSSProperties = {
   background: "var(--bg-input)",
   textAlign: "left",
 };
-const rowOn: React.CSSProperties = { borderColor: "#fff", background: "var(--bg-active)" };
+const rowOn: React.CSSProperties = { borderColor: "var(--text-primary)", background: "var(--bg-active)" };
 const rowBlocked: React.CSSProperties = { opacity: 0.45 };
 const create: React.CSSProperties = {
   width: "100%",
   marginTop: 18,
-  background: "#fff",
-  color: "#000",
+  background: "var(--btn-primary-bg)",
+  color: "var(--btn-primary-fg)",
   fontWeight: 600,
   fontSize: 14,
   padding: "11px",

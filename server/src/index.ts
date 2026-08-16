@@ -475,6 +475,12 @@ app.post("/api/computer/restart", async () => {
   return { computer: bots.getComputer() };
 });
 
+app.post("/api/computer/stop", async () => {
+  groups.abortActive();
+  await bots.stopComputer();
+  return { computer: bots.getComputer() };
+});
+
 // ---------- WebSocket ----------
 app.get("/ws", { websocket: true }, (socket) => {
   const ws = socket as unknown as WebSocket;

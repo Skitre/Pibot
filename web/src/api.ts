@@ -131,6 +131,8 @@ export const api = {
     fetch("/api/computer/start", { method: "POST" }).then(j<{ computer: Computer }>),
   restartComputer: () =>
     fetch("/api/computer/restart", { method: "POST" }).then(j<{ computer: Computer }>),
+  stopComputer: () =>
+    fetch("/api/computer/stop", { method: "POST" }).then(j<{ computer: Computer }>),
 
   listGroups: () => fetch("/api/groups").then(j<{ groups: Group[] }>),
   createGroup: (name: string, botIds: string[]) =>

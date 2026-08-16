@@ -133,7 +133,7 @@ export function CreateBotModal({ onClose, onCreated, onOpenSettings }: Props) {
 const backdrop: React.CSSProperties = {
   position: "fixed",
   inset: 0,
-  background: "rgba(0,0,0,0.55)",
+  background: "var(--overlay)",
   display: "grid",
   placeItems: "center",
   zIndex: 40,
@@ -183,7 +183,7 @@ const tpl: React.CSSProperties = {
   textAlign: "left",
   color: "var(--text-primary)",
 };
-const tplActive: React.CSSProperties = { borderColor: "#fff", background: "var(--bg-active)" };
+const tplActive: React.CSSProperties = { borderColor: "var(--text-primary)", background: "var(--bg-active)" };
 const label: React.CSSProperties = {
   display: "block",
   fontSize: 12,
@@ -217,8 +217,8 @@ const linkBtn: React.CSSProperties = {
 const create: React.CSSProperties = {
   width: "100%",
   marginTop: 18,
-  background: "#fff",
-  color: "#000",
+  background: "var(--btn-primary-bg)",
+  color: "var(--btn-primary-fg)",
   fontWeight: 600,
   fontSize: 14,
   padding: "11px",

@@ -190,8 +190,8 @@ const empty: React.CSSProperties = {
   justifyContent: "center",
 };
 const cta: React.CSSProperties = {
-  background: "#fff",
-  color: "#000",
+  background: "var(--btn-primary-bg)",
+  color: "var(--btn-primary-fg)",
   fontWeight: 600,
   fontSize: 14,
   padding: "11px 22px",

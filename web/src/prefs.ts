@@ -1,10 +1,12 @@
 import { useSyncExternalStore } from "react";
 
 export type Locale = "zh" | "en";
+export type Theme = "dark" | "light";
 
 // 界面偏好：只影响本机显示，存 localStorage，不需要走服务端。
 export interface Prefs {
   locale: Locale;
+  theme: Theme;
   panelOpenByDefault: boolean;
   confirmDestructive: boolean;
   showToolCards: boolean;
@@ -14,12 +16,19 @@ export interface Prefs {
 
 const DEFAULTS: Prefs = {
   locale: "zh",
+  theme: "dark",
   panelOpenByDefault: true,
   confirmDestructive: true,
   showToolCards: true,
   showSystemLines: true,
   notifications: false,
 };
+
+export function applyTheme(theme: Theme) {
+  const root = document.documentElement;
+  root.dataset.theme = theme;
+  root.style.colorScheme = theme;
+}
 
 const KEY = "pibot.prefs";
 
@@ -28,8 +37,11 @@ function load(): Prefs {
     const raw = localStorage.getItem(KEY);
     const parsed = raw ? { ...DEFAULTS, ...JSON.parse(raw) } : { ...DEFAULTS };
     if (parsed.locale !== "zh" && parsed.locale !== "en") parsed.locale = "zh";
+    if (parsed.theme !== "light" && parsed.theme !== "dark") parsed.theme = "dark";
+    applyTheme(parsed.theme);
     return parsed;
   } catch {
+    applyTheme(DEFAULTS.theme);
     return { ...DEFAULTS };
   }
 }
@@ -47,6 +59,7 @@ class PrefsStore {
 
   set(patch: Partial<Prefs>) {
     this.state = { ...this.state, ...patch };
+    if (patch.theme) applyTheme(this.state.theme);
     try {
       localStorage.setItem(KEY, JSON.stringify(this.state));
     } catch {

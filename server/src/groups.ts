@@ -220,6 +220,11 @@ export class GroupManager {
     this.saveGroupMessage(groupId, "System", "Stopped.", null, "system");
   }
 
+  abortActive() {
+    const ids = new Set([...this.activeLoop.keys(), ...this.waiting]);
+    for (const id of ids) this.abortGroup(id);
+  }
+
   postUserMessage(groupId: string, text: string, attachments?: Attachment[]) {
     if (!this.getGroup(groupId)) return;
     const content = typeof text === "string" ? text.trim() : "";

@@ -8,6 +8,7 @@ import { FileCard, WorkLog } from "./Messages";
 import { Markdown } from "./Markdown";
 import { formatDayDivider } from "../util";
 import { ScreenIcon, GearIcon } from "./icons";
+import { ThemeToggle } from "./ThemeToggle";
 import { useT } from "../i18n";
 
 interface Props {
@@ -79,6 +80,7 @@ export function GroupChatView({ group, panelOpen, onTogglePanel }: Props) {
           <span style={memberCount}>{tr("group.bots", { n: members.length })}</span>
         </div>
         <div style={{ display: "flex", gap: 4, alignItems: "center", position: "relative" }}>
+          <ThemeToggle />
           <button
             style={{ ...hIconBtn, color: panelOpen ? "var(--text-primary)" : "var(--text-secondary)" }}
             onClick={onTogglePanel}
@@ -468,6 +470,7 @@ const bubbleUser: React.CSSProperties = {
   borderBottomRightRadius: 6,
   fontSize: 14,
   background: "var(--bg-bubble-user)",
+  color: "var(--text-bubble-user)",
   wordBreak: "break-word",
   animation: "fade-up 0.18s ease",
 };
@@ -494,13 +497,13 @@ const moderatorMenu: React.CSSProperties = {
   right: 0,
   zIndex: 30,
   width: 300,
-  background: "#232326",
+  background: "var(--bg-elevated)",
   borderWidth: 1,
   borderStyle: "solid",
   borderColor: "var(--border-subtle)",
   borderRadius: 10,
   padding: "10px 12px 12px",
-  boxShadow: "0 12px 32px rgba(0,0,0,0.55)",
+  boxShadow: "var(--shadow)",
   animation: "fade-up 0.12s ease",
 };
 const moderatorTitle: React.CSSProperties = {

@@ -174,6 +174,9 @@ export class BotManager {
   private computer: ComputerState;
   private ensuring: Promise<void> | null = null;
   private restarting: Promise<void> | null = null;
+  private stopping: Promise<void> | null = null;
+  /** 关电脑时记下还在跑的 Bot，开机后自动唤醒。 */
+  private resumeBotIds = new Set<string>();
   private live = new Map<string, LiveBot>();
   private assistantListeners = new Set<(botId: string, text: string) => void>();
   private teammateHandoffListeners = new Set<
@@ -534,6 +537,7 @@ export class BotManager {
   /** 确保共享电脑容器在跑、桥接已连接。并发调用会合并成一次。 */
   async ensureComputer(): Promise<void> {
     if (this.computer.status === "online" && this.bridge?.connected) return;
+    if (this.stopping) await this.stopping.catch(() => {});
     if (this.restarting) return this.restarting;
     if (this.ensuring) return this.ensuring;
     this.ensuring = this.doEnsureComputer().finally(() => {
@@ -546,6 +550,7 @@ export class BotManager {
   async restartComputer(): Promise<void> {
     if (this.restarting) return this.restarting;
     this.restarting = (async () => {
+      if (this.stopping) await this.stopping.catch(() => {});
       if (this.ensuring) await this.ensuring.catch(() => {});
       await this.doRestartComputer();
     })().finally(() => {
@@ -554,9 +559,25 @@ export class BotManager {
     return this.restarting;
   }
 
+  /** 关掉共享电脑：停容器、Bot 休眠，卷和文件保留。 */
+  async stopComputer(): Promise<void> {
+    if (this.stopping) return this.stopping;
+    this.stopping = (async () => {
+      if (this.ensuring) await this.ensuring.catch(() => {});
+      if (this.restarting) await this.restarting.catch(() => {});
+      await this.doStopComputer();
+    })().finally(() => {
+      this.stopping = null;
+    });
+    return this.stopping;
+  }
+
   private startEligibleBotSessions() {
     for (const bot of this.listBots()) {
-      if (bot.status !== "stopped") this.kickBotSession(bot.id);
+      const resume = this.resumeBotIds.has(bot.id);
+      if (bot.status === "stopped" && !resume) continue;
+      this.resumeBotIds.delete(bot.id);
+      this.kickBotSession(bot.id);
     }
   }
 
@@ -631,6 +652,28 @@ export class BotManager {
       }
       throw err;
     }
+  }
+
+  private async doStopComputer(): Promise<void> {
+    this.dropAllLive();
+    this.resumeBotIds.clear();
+    for (const bot of this.listBots()) {
+      if (bot.status !== "stopped") {
+        this.resumeBotIds.add(bot.id);
+        this.setStatus(bot.id, "stopped");
+      }
+    }
+    this.bridge?.close();
+    this.bridge = null;
+    try {
+      await this.docker.stopComputer();
+    } catch (err) {
+      this.computer.status = "offline";
+      this.broadcastComputer();
+      throw err;
+    }
+    this.computer.status = "offline";
+    this.broadcastComputer();
   }
 
   /** Host 规则：每次启动都覆盖写入，pi 读 ~/.pi/agent/APPEND_SYSTEM.md。 */

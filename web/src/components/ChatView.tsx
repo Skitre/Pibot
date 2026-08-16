@@ -8,6 +8,7 @@ import { Composer } from "./Composer";
 import { BotAvatar } from "./BotAvatar";
 import type { BotMarkHandle } from "../mark/BotMark";
 import { ScreenIcon, GearIcon } from "./icons";
+import { ThemeToggle } from "./ThemeToggle";
 import { formatDayDivider, isMainChannel } from "../util";
 import { useT } from "../i18n";
 
@@ -89,6 +90,7 @@ export function ChatView({ bot, panelOpen, onTogglePanel, onOpenSettings, onOpen
               {activeProfile.model_name}
             </button>
           )}
+          <ThemeToggle />
           <button
             style={{ ...hIconBtn, color: panelOpen ? "var(--text-primary)" : "var(--text-secondary)" }}
             onClick={onTogglePanel}
@@ -318,13 +320,13 @@ const menu: React.CSSProperties = {
   right: 0,
   zIndex: 30,
   minWidth: 230,
-  background: "#232326",
+  background: "var(--bg-elevated)",
   borderWidth: 1,
   borderStyle: "solid",
   borderColor: "var(--border-subtle)",
   borderRadius: 10,
   padding: 4,
-  boxShadow: "0 12px 32px rgba(0,0,0,0.55)",
+  boxShadow: "var(--shadow)",
   animation: "fade-up 0.12s ease",
 };
 const menuLabel: React.CSSProperties = {

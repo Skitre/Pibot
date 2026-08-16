@@ -224,7 +224,7 @@ export function EditBotModal({ bot, onClose }: Props) {
 const backdrop: React.CSSProperties = {
   position: "fixed",
   inset: 0,
-  background: "rgba(0,0,0,0.6)",
+  background: "var(--overlay)",
   display: "grid",
   placeItems: "center",
   zIndex: 45,
@@ -311,8 +311,8 @@ const linkBtn: React.CSSProperties = {
   padding: 0,
 };
 const primaryBtn: React.CSSProperties = {
-  background: "#fff",
-  color: "#000",
+  background: "var(--btn-primary-bg)",
+  color: "var(--btn-primary-fg)",
   fontWeight: 600,
   fontSize: 13,
   padding: "8px 18px",

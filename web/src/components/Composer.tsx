@@ -178,7 +178,7 @@ export function Composer({
         {allowAttachments && (
           <>
             <button style={plusBtn} title={tr("composer.attach")} onClick={() => fileInput.current?.click()}>
-              <PlusIcon size={18} color="var(--text-secondary)" />
+              <PlusIcon size={18} color="var(--composer-plus-fg)" />
             </button>
             <input
               ref={fileInput}
@@ -241,7 +241,7 @@ export function Composer({
         />
         {working && !hasContent ? (
           <button style={stopBtn} onClick={onStop} title={tr("composer.stop")}>
-            <StopIcon size={16} color="#000" />
+            <StopIcon size={16} color="var(--btn-primary-fg)" />
           </button>
         ) : (
           <button
@@ -250,7 +250,7 @@ export function Composer({
             title={hasContent ? tr("composer.send") : tr("composer.voice")}
             disabled={busy}
           >
-            {hasContent ? <SendArrow size={18} color="#000" /> : <MicIcon size={18} color="var(--text-primary)" />}
+            {hasContent ? <SendArrow size={18} color="var(--btn-primary-fg)" /> : <MicIcon size={18} color="var(--composer-mic-fg)" />}
           </button>
         )}
       </div>
@@ -285,13 +285,13 @@ const skillMenuBox: React.CSSProperties = {
   left: 20,
   right: 20,
   marginBottom: 6,
-  background: "#232326",
+  background: "var(--bg-elevated)",
   borderWidth: 1,
   borderStyle: "solid",
   borderColor: "var(--border-subtle)",
   borderRadius: 12,
   padding: 4,
-  boxShadow: "0 12px 32px rgba(0,0,0,0.55)",
+  boxShadow: "var(--shadow)",
   zIndex: 25,
   animation: "fade-up 0.12s ease",
 };
@@ -353,10 +353,11 @@ const pill: React.CSSProperties = {
   alignItems: "center",
   gap: 8,
   minHeight: 46,
-  background: "var(--bg-input)",
-  border: "1px solid var(--border-subtle)",
+  background: "var(--composer-bg)",
+  border: "1px solid var(--composer-border)",
   borderRadius: 23,
   padding: "4px 6px 4px 6px",
+  boxShadow: "var(--composer-shadow)",
 };
 const pillDragOver: React.CSSProperties = {
   borderColor: "var(--accent-blue)",
@@ -366,6 +367,7 @@ const plusBtn: React.CSSProperties = {
   width: 32,
   height: 32,
   borderRadius: "50%",
+  background: "var(--composer-plus-bg)",
   display: "grid",
   placeItems: "center",
   flexShrink: 0,
@@ -385,7 +387,7 @@ const sendBtn: React.CSSProperties = {
   width: 32,
   height: 32,
   borderRadius: "50%",
-  background: "#fff",
+  background: "var(--btn-primary-bg)",
   display: "grid",
   placeItems: "center",
   flexShrink: 0,
@@ -394,7 +396,7 @@ const stopBtn: React.CSSProperties = {
   width: 32,
   height: 32,
   borderRadius: "50%",
-  background: "#fff",
+  background: "var(--btn-primary-bg)",
   display: "grid",
   placeItems: "center",
   flexShrink: 0,
@@ -403,7 +405,7 @@ const micBtn: React.CSSProperties = {
   width: 32,
   height: 32,
   borderRadius: "50%",
-  background: "transparent",
+  background: "var(--composer-mic-bg)",
   display: "grid",
   placeItems: "center",
   flexShrink: 0,

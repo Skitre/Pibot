@@ -123,6 +123,17 @@ export class DockerManager {
     return { containerId: existing[0].Id, vncPort, bridgePort };
   }
 
+  /** 关掉共享电脑，不删容器和卷。下次 ensure 再 start。 */
+  async stopComputer(): Promise<void> {
+    const existing = await docker.listContainers({
+      all: true,
+      filters: { name: [COMPUTER_NAME] },
+    });
+    if (existing.length === 0) return;
+    if (existing[0].State !== "running") return;
+    await docker.getContainer(existing[0].Id).stop({ t: 8 });
+  }
+
   async startContainer(containerId: string) {
     const c = docker.getContainer(containerId);
     const info = await c.inspect();

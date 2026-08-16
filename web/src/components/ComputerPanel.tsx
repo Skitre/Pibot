@@ -18,6 +18,7 @@ export function ComputerPanel({ bot, onClose }: Props) {
   const [creating, setCreating] = useState(false);
   const [computerStartFailed, setComputerStartFailed] = useState(false);
   const [computerRestartFailed, setComputerRestartFailed] = useState(false);
+  const [computerStopFailed, setComputerStopFailed] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const tr = useT();
@@ -53,6 +54,7 @@ export function ComputerPanel({ bot, onClose }: Props) {
     if (!online) return;
     setComputerStartFailed(false);
     setComputerRestartFailed(false);
+    setComputerStopFailed(false);
   }, [online]);
 
   const openOrStartComputer = async () => {
@@ -63,6 +65,7 @@ export function ComputerPanel({ bot, onClose }: Props) {
     if (computerStarting) return;
     setComputerStartFailed(false);
     setComputerRestartFailed(false);
+    setComputerStopFailed(false);
     try {
       await api.startComputer();
     } catch {
@@ -76,10 +79,25 @@ export function ComputerPanel({ bot, onClose }: Props) {
     if (!askConfirm(tr("computer.restartConfirm"))) return;
     setComputerStartFailed(false);
     setComputerRestartFailed(false);
+    setComputerStopFailed(false);
     try {
       await api.restartComputer();
     } catch {
       setComputerRestartFailed(true);
+    }
+  };
+
+  const stopComputer = async () => {
+    setMenuOpen(false);
+    if (!online || computerStarting) return;
+    if (!askConfirm(tr("computer.stopConfirm"))) return;
+    setComputerStartFailed(false);
+    setComputerRestartFailed(false);
+    setComputerStopFailed(false);
+    try {
+      await api.stopComputer();
+    } catch {
+      setComputerStopFailed(true);
     }
   };
 
@@ -124,6 +142,18 @@ export function ComputerPanel({ bot, onClose }: Props) {
                 >
                   {tr("computer.restart")}
                 </button>
+                <button
+                  style={{
+                    ...settingsMenuItem,
+                    color: online && !computerStarting ? "#ef4444" : "var(--text-secondary)",
+                    opacity: online && !computerStarting ? 1 : 0.4,
+                    cursor: online && !computerStarting ? "pointer" : "default",
+                  }}
+                  disabled={!online || computerStarting}
+                  onClick={stopComputer}
+                >
+                  {tr("computer.stop")}
+                </button>
               </div>
             )}
           </div>
@@ -151,13 +181,15 @@ export function ComputerPanel({ bot, onClose }: Props) {
             <div style={thumbPlaceholder}>
               <span>{computerStarting ? tr("computer.booting") : tr("computer.offline")}</span>
               {!computerStarting && (
-                <span style={computerStartFailed || computerRestartFailed ? startError : startHint}>
+                <span style={computerStartFailed || computerRestartFailed || computerStopFailed ? startError : startHint}>
                   {tr(
-                    computerRestartFailed
-                      ? "computer.restartFailed"
-                      : computerStartFailed
-                        ? "computer.startFailed"
-                        : "computer.startHint",
+                    computerStopFailed
+                      ? "computer.stopFailed"
+                      : computerRestartFailed
+                        ? "computer.restartFailed"
+                        : computerStartFailed
+                          ? "computer.startFailed"
+                          : "computer.startHint",
                   )}
                 </span>
               )}
@@ -298,11 +330,11 @@ const settingsMenu: React.CSSProperties = {
   right: 0,
   zIndex: 30,
   minWidth: 170,
-  background: "#232326",
+  background: "var(--bg-elevated)",
   border: "1px solid var(--border-subtle)",
   borderRadius: 10,
   padding: 4,
-  boxShadow: "0 12px 32px rgba(0, 0, 0, 0.55)",
+  boxShadow: "var(--shadow)",
 };
 const settingsMenuItem: React.CSSProperties = {
   display: "block",

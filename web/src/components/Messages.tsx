@@ -452,7 +452,7 @@ const bubbleBase: React.CSSProperties = {
 const bubbleUser: React.CSSProperties = {
   ...bubbleBase,
   background: "var(--bg-bubble-user)",
-  color: "var(--text-primary)",
+  color: "var(--text-bubble-user)",
   borderBottomRightRadius: 6,
 };
 const bubbleBot: React.CSSProperties = {
@@ -567,8 +567,8 @@ const resolvedTag: React.CSSProperties = {
   fontStyle: "italic",
 };
 const btnPrimary: React.CSSProperties = {
-  background: "#fff",
-  color: "#000",
+  background: "var(--btn-primary-bg)",
+  color: "var(--btn-primary-fg)",
   fontWeight: 600,
   fontSize: 13,
   padding: "7px 16px",
@@ -611,7 +611,7 @@ const attFile: React.CSSProperties = {
   background: "var(--bg-bubble-user)",
   borderRadius: 12,
   padding: "9px 13px",
-  color: "var(--text-primary)",
+  color: "var(--text-bubble-user)",
   textDecoration: "none",
   maxWidth: 280,
 };

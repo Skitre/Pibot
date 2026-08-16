@@ -12,6 +12,7 @@ import { api } from "../api";
 import { store, useStore } from "../store";
 import { CloseIcon, PlusIcon } from "./icons";
 import { prefs, usePrefs } from "../prefs";
+import { useT } from "../i18n";
 
 type Tab = "models" | "mcp" | "approvals" | "skills" | "general" | "about";
 
@@ -1176,10 +1177,34 @@ function SkillForm({
 
 function GeneralTab() {
   const p = usePrefs();
+  const tr = useT();
   return (
     <div>
       <h2 style={h2}>General</h2>
       <p style={hint}>界面偏好保存在本机浏览器。</p>
+
+      <div style={{ ...toggleRow, cursor: "default" }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 500 }}>{tr("general.theme")}</div>
+          <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>{tr("general.themeDesc")}</div>
+        </div>
+        <div style={seg}>
+          <button
+            type="button"
+            style={p.theme === "dark" ? segOn : segOff}
+            onClick={() => prefs.set({ theme: "dark" })}
+          >
+            {tr("general.themeDark")}
+          </button>
+          <button
+            type="button"
+            style={p.theme === "light" ? segOn : segOff}
+            onClick={() => prefs.set({ theme: "light" })}
+          >
+            {tr("general.themeLight")}
+          </button>
+        </div>
+      </div>
 
       <Toggle
         label="默认展开 Bot 的电脑面板"
@@ -1293,7 +1318,7 @@ function Row({ k, v }: { k: string; v: string }) {
 const backdrop: React.CSSProperties = {
   position: "fixed",
   inset: 0,
-  background: "rgba(0,0,0,0.6)",
+  background: "var(--overlay)",
   display: "grid",
   placeItems: "center",
   zIndex: 45,
@@ -1385,8 +1410,8 @@ const cardMeta: React.CSSProperties = {
 };
 const badge: React.CSSProperties = {
   fontSize: 10.5,
-  background: "#fff",
-  color: "#000",
+  background: "var(--btn-primary-bg)",
+  color: "var(--btn-primary-fg)",
   fontWeight: 600,
   padding: "1px 7px",
   borderRadius: 8,
@@ -1413,8 +1438,8 @@ const smallBtn: React.CSSProperties = {
   color: "var(--text-primary)",
 };
 const primaryBtn: React.CSSProperties = {
-  background: "#fff",
-  color: "#000",
+  background: "var(--btn-primary-bg)",
+  color: "var(--btn-primary-fg)",
   fontWeight: 600,
   fontSize: 13,
   padding: "8px 18px",
@@ -1479,6 +1504,27 @@ const checkRow: React.CSSProperties = {
   alignItems: "center",
   gap: 8,
   height: 36,
+};
+const seg: React.CSSProperties = {
+  display: "flex",
+  gap: 2,
+  flexShrink: 0,
+  background: "var(--bg-input)",
+  border: "1px solid var(--border-subtle)",
+  borderRadius: 8,
+  padding: 2,
+};
+const segOff: React.CSSProperties = {
+  fontSize: 12.5,
+  padding: "5px 10px",
+  borderRadius: 6,
+  color: "var(--text-secondary)",
+};
+const segOn: React.CSSProperties = {
+  ...segOff,
+  background: "var(--bg-elevated)",
+  color: "var(--text-primary)",
+  fontWeight: 600,
 };
 const toggleRow: React.CSSProperties = {
   display: "flex",

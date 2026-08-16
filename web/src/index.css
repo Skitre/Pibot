@@ -1,4 +1,5 @@
 :root {
+  --bg-app: #000;
   --bg-sidebar: #1b1b1d;
   --bg-main: #0f0f10;
   --bg-panel: #0f0f10;
@@ -7,14 +8,30 @@
   --bg-input: #202023;
   --bg-hover: #29292c;
   --bg-active: #2f2f33;
+  --bg-elevated: #232326;
   --text-primary: #e8e8ea;
+  --text-bubble-user: var(--text-primary);
   --text-secondary: #8e8e93;
   --text-placeholder: #6e6e73;
   --accent-blue: #3b82f6;
   --green-dot: #30d158;
   --code-pink: #e989a6;
   --code-bg: #34252c;
+  --code-block-bg: #0b0b0c;
   --border-subtle: #2e2e31;
+  --btn-primary-bg: #fff;
+  --btn-primary-fg: #000;
+  --overlay: rgba(0, 0, 0, 0.6);
+  --shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  --scrollbar-thumb: #3a3a3e;
+  --table-stripe: rgba(255, 255, 255, 0.02);
+  --composer-bg: var(--bg-input);
+  --composer-border: var(--border-subtle);
+  --composer-shadow: none;
+  --composer-plus-bg: transparent;
+  --composer-plus-fg: var(--text-secondary);
+  --composer-mic-bg: transparent;
+  --composer-mic-fg: var(--text-primary);
 
   --font: "Inter", -apple-system, "Segoe UI", system-ui, sans-serif;
 
@@ -23,6 +40,44 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   color: var(--text-primary);
+  color-scheme: dark;
+}
+
+html[data-theme="light"] {
+  --bg-app: #fff;
+  --bg-sidebar: #fafafa;
+  --bg-main: #fff;
+  --bg-panel: #fff;
+  --bg-bubble-bot: #f7f7f8;
+  --bg-bubble-user: #1c1c1e;
+  --bg-input: #ececef;
+  --bg-hover: #e8e8eb;
+  --bg-active: #e2e2e6;
+  --bg-elevated: #fff;
+  --text-primary: #1c1c1e;
+  --text-bubble-user: #fff;
+  --text-secondary: #6e6e73;
+  --text-placeholder: #8e8e93;
+  --accent-blue: #2563eb;
+  --green-dot: #24c15a;
+  --code-pink: #c23d6c;
+  --code-bg: #f6e6ec;
+  --code-block-bg: #f4f4f6;
+  --border-subtle: #dcdce0;
+  --btn-primary-bg: #1c1c1e;
+  --btn-primary-fg: #fff;
+  --overlay: rgba(20, 20, 22, 0.4);
+  --shadow: 0 12px 32px rgba(0, 0, 0, 0.12);
+  --scrollbar-thumb: #c8c8cc;
+  --table-stripe: rgba(0, 0, 0, 0.03);
+  --composer-bg: #fff;
+  --composer-border: #e4e4e7;
+  --composer-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 14px rgba(0, 0, 0, 0.06);
+  --composer-plus-bg: #ececee;
+  --composer-plus-fg: #3a3a3e;
+  --composer-mic-bg: #1c1c1e;
+  --composer-mic-fg: #fff;
+  color-scheme: light;
 }
 
 * {
@@ -37,7 +92,7 @@ body,
 }
 
 body {
-  background: #000;
+  background: var(--bg-app);
   overflow: hidden;
 }
 
@@ -55,12 +110,17 @@ textarea {
   color: inherit;
 }
 
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-placeholder);
+}
+
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background: #3a3a3e;
+  background: var(--scrollbar-thumb);
   border-radius: 6px;
   border: 2px solid transparent;
   background-clip: content-box;
@@ -519,7 +579,7 @@ textarea {
   margin: 14px 0 6px;
   line-height: 1.3;
   font-weight: 650;
-  color: var(--text-primary);
+  color: inherit;
 }
 .pibot-md h1 {
   font-size: 1.28em;
@@ -592,7 +652,7 @@ textarea {
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 .pibot-md pre {
-  background: #0b0b0c;
+  background: var(--code-block-bg);
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   padding: 10px 12px;
@@ -635,7 +695,7 @@ textarea {
   font-weight: 600;
 }
 .pibot-md tr:nth-child(even) td {
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--table-stripe);
 }
 
 @keyframes fade-up {

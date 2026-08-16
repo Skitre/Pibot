@@ -170,7 +170,7 @@ export function CommandPalette({ onClose, onSelect, onNewBot, onOpenSettings }: 
 const backdrop: React.CSSProperties = {
   position: "fixed",
   inset: 0,
-  background: "rgba(0,0,0,0.55)",
+  background: "var(--overlay)",
   display: "flex",
   justifyContent: "center",
   paddingTop: "16vh",
@@ -189,7 +189,7 @@ const panel: React.CSSProperties = {
   borderColor: "var(--border-subtle)",
   borderRadius: 14,
   overflow: "hidden",
-  boxShadow: "0 24px 64px rgba(0,0,0,0.6)",
+  boxShadow: "var(--shadow)",
   animation: "fade-up 0.15s ease",
   alignSelf: "flex-start",
 };

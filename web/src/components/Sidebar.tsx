@@ -520,11 +520,11 @@ const S: Record<string, React.CSSProperties> = {
     position: "absolute",
     zIndex: 30,
     minWidth: 170,
-    background: "#232326",
+    background: "var(--bg-elevated)",
     border: "1px solid var(--border-subtle)",
     borderRadius: 10,
     padding: 4,
-    boxShadow: "0 12px 32px rgba(0,0,0,0.55)",
+    boxShadow: "var(--shadow)",
     animation: "fade-up 0.12s ease",
   },
   menuItem: {
