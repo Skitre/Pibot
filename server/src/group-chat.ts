@@ -4,8 +4,8 @@ export const GROUP_MIN_MEMBERS = 2;
 export const GROUP_MAX_MEMBERS = 6;
 /** 一轮用户发言后的成员发言硬顶（只数 text/handoff，不含工具卡）。 */
 export const GROUP_MAX_MEMBER_TURNS = 40;
-/** Soft preference only (prompt). Not a hard truncate — see takeGroupPosts. */
-export const GROUP_MAX_MESSAGES_PER_TURN = 2;
+/** Per-member room-post cap, enforced in interceptTool (not takeGroupPosts). */
+export const GROUP_MAX_MESSAGES_PER_TURN = 8;
 export const GROUP_MAX_MODERATOR_CALLS = 12;
 export const GROUP_MAX_WALL_MS = 20 * 60 * 1000;
 export const GROUP_HISTORY_WINDOW = 24;
@@ -28,6 +28,7 @@ export interface GroupPost {
   text: string;
   next: string[];
   done: boolean;
+  pass: boolean;
   persisted?: boolean;
 }
 
@@ -67,6 +68,11 @@ export function isPassContent(text: string): boolean {
   return value === "" || value === "(pass)" || value === "(pass.)" || value === "pass";
 }
 
+/** Structured pass wins; literal (pass) remains a fallback for older models. */
+export function isSilentPost(post: Pick<GroupPost, "text" | "pass">): boolean {
+  return post.pass === true || isPassContent(post.text);
+}
+
 export function isSendMessageTool(name: string): boolean {
   const normalized = name.replace(/[^a-zA-Z]/g, "").toLowerCase();
   return normalized === "sendmessage" || normalized === "sendgroupmessage";
@@ -96,6 +102,7 @@ export function parseGroupPost(args: unknown): GroupPost {
     text: String(record.text ?? record.message ?? ""),
     next: normalizeNameList(record.next),
     done: record.done === true || record.done === "true",
+    pass: record.pass === true || record.pass === "true",
   };
 }
 
@@ -106,7 +113,7 @@ export function takeGroupPosts(sends: GroupPost[], fallback?: string): GroupPost
   if (sends.length > 0) return sends;
   const draft = (fallback ?? "").trim();
   if (!draft || isPassContent(draft)) return [];
-  return [{ text: draft, next: [], done: false }];
+  return [{ text: draft, next: [], done: false, pass: false }];
 }
 
 export function mergeNextNames(into: string[], extra: string[]): string[] {
@@ -133,12 +140,20 @@ export function lastPostSignal(posts: GroupPost[]): { next: string[]; done: bool
 
 export function resolveMembersByNames<T extends GroupMember>(members: T[], names: string[]): T[] {
   if (names.length === 0 || members.length === 0) return [];
-  const needles = new Set(names.map((name) => name.trim().toLowerCase()).filter(Boolean));
-  if (needles.size === 0) return [];
   const rosterNames = members.map((member) => member.name);
-  return members.filter((member) =>
-    mentionKeysFor(member.name, rosterNames).some((key) => needles.has(key.toLowerCase())),
-  );
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const raw of names) {
+    const needle = raw.trim().toLowerCase();
+    if (!needle) continue;
+    const hit = members.find((member) =>
+      mentionKeysFor(member.name, rosterNames).some((key) => key.toLowerCase() === needle),
+    );
+    if (!hit || seen.has(hit.id)) continue;
+    seen.add(hit.id);
+    out.push(hit);
+  }
+  return out;
 }
 
 /** 防连选：主持人/Bot next 不应再点上一位，除非花名册只剩此人。 */
@@ -293,12 +308,14 @@ export function buildGroupMemberSystemPrompt(
     "Shared computer, files, and memory apply to both.",
     `Teammates:\n${teammates || "(none)"}`,
     "Speak only as yourself. Do not role-play other members or the user.",
-    "Do the work with your usual tools first, then report progress with send_message.",
+    "When there is work to do, use your usual tools first, then report with send_message.",
     "To post in this room, call the send_message tool. Raw assistant text is a private draft and is not shown unless you never call any tool.",
-    "When your part is ready for a teammate, set next to their exact name(s). When the user's task is finished and nobody else needs to act, set done=true.",
+    "If you were asked to speak and you have something to say — even a short reply to the user — send_message with that text. Set pass=true only when you truly have nothing to add; the text is then ignored and never shown.",
+    "If the user just wrote to the group and did not @ anyone, answer them. Do not all pass and leave the user hanging.",
+    "Reply in the same language the user is using.",
+    "When your part is ready for a teammate, set next to their exact name(s). When nothing useful remains for anyone, set done=true.",
     "Address a teammate with @Name only as extra context; the orchestrator follows send_message next/done, not @ guesses.",
-    'If you have nothing to do, send_message with "(pass)" or stay silent.',
-    "Prefer one or two room posts this turn. Put next or done on your last send_message — later posts still count.",
+    "Prefer one or two room posts this turn. Put next, done, or pass on your last send_message — later posts still count.",
   ].join("\n");
 }
 
@@ -308,7 +325,7 @@ export function buildGroupTurnPrompt(botName: string, groupName: string, newLine
     "",
     formatChatLines(newLines),
     "",
-    "Do the work, then report with send_message. Set next to the teammate who should take over, or done=true if the task is finished. (pass) if you have nothing to do.",
+    "If you have something to say, send_message in the user's language. Set pass=true only when you have nothing to add. Set next to a teammate who should continue, or done=true when nothing useful remains.",
   ].join("\n");
 }
 
@@ -325,6 +342,6 @@ export function buildGroupSeedPrompt(
     "Group transcript so far:",
     formatChatLines(lastMessages(history, GROUP_HISTORY_WINDOW)),
     "",
-    "Do the work, then report with send_message. Set next to the teammate who should take over, or done=true if the task is finished. (pass) if you have nothing to do.",
+    "If you have something to say, send_message in the user's language. Set pass=true only when you have nothing to add. Set next to a teammate who should continue, or done=true when nothing useful remains.",
   ].join("\n");
 }

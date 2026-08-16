@@ -31,7 +31,8 @@ export function ComputerPanel({ bot, onClose }: Props) {
       return;
     }
     api.routines(bot.id).then((r) => setRoutines(r.routines));
-  }, [bot]);
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- refetch only when the selected bot changes
+  }, [bot?.id]);
 
   useEffect(() => {
     if (!menuOpen) return;

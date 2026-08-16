@@ -16,7 +16,7 @@ import {
   fileNamesFromLines,
   formatChatLines,
   guardNextMembers,
-  isPassContent,
+  isSilentPost,
   lastMessages,
   lastPostSignal,
   latestUserTask,
@@ -47,6 +47,7 @@ interface TurnState {
   speakCount: Map<string, number>;
   lastSpeakerId: string | null;
   userTask: string;
+  rescued: Set<string>;
 }
 
 export class GroupError extends Error {
@@ -281,6 +282,7 @@ export class GroupManager {
       speakCount: new Map(),
       lastSpeakerId: null,
       userTask: latestUserTask(this.chatLines(groupId)),
+      rescued: new Set(),
     };
 
     let queue =
@@ -322,11 +324,19 @@ export class GroupManager {
           if (!this.isCurrent(groupId, epoch)) return;
           const spoken = [...state.speakCount.values()].reduce((sum, n) => sum + n, 0);
           if ((decision.done || decision.next.length === 0) && spoken === 0) {
-            const pick = members.find((member) => (state.speakCount.get(member.id) ?? 0) === 0) ?? members[0];
-            console.log(
-              `[groups] ${groupId} moderator done ignored (no member posts yet), pick ${pick?.name ?? "?"}`,
+            const pool = members.filter(
+              (member) => !state.rescued.has(member.id) && member.id !== state.lastSpeakerId,
             );
-            queue = pick ? [pick] : [];
+            const pick = pool[0];
+            if (!pick) {
+              this.stopWith(groupId, epoch, "No one left to speak.");
+              return;
+            }
+            state.rescued.add(pick.id);
+            console.log(
+              `[groups] ${groupId} moderator done ignored (no member posts yet), pick ${pick.name}`,
+            );
+            queue = [pick];
           } else if (decision.done || decision.next.length === 0) {
             this.stopWith(groupId, epoch, decision.reason || "No one left to speak.");
             return;
@@ -355,7 +365,7 @@ export class GroupManager {
           }
           const posts = await this.runOneTurn(groupId, bot, epoch);
           state.lastSpeakerId = bot.id;
-          const spoken = posts.filter((post) => post.text && !isPassContent(post.text)).length;
+          const spoken = posts.filter((post) => !isSilentPost(post)).length;
           state.speakCount.set(bot.id, (state.speakCount.get(bot.id) ?? 0) + spoken);
           const signal = lastPostSignal(posts);
           if (signal.done) {
@@ -432,7 +442,7 @@ export class GroupManager {
     if (!this.isCurrent(groupId, epoch)) return posts;
     for (const post of posts) {
       if (post.persisted) continue;
-      if (!post.text || isPassContent(post.text)) continue;
+      if (isSilentPost(post) || !post.text) continue;
       this.saveGroupMessage(groupId, bot.name, post.text, bot.id);
     }
     return posts;

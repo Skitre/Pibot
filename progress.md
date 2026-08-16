@@ -1,78 +1,65 @@
 # Progress Log
 
-## Session: 2026-08-16（缺陷修复与真实验证）
+## Session: 2026-08-16（自然回应 + 第二批缺陷）
 
-### Phase 0: git 基线
+### Phase 1: 提示词与结构化 pass
 - **Status:** complete
 - Actions taken:
-  - `git init`，基线提交 `cbe4123`
+  - 主持人 SYSTEM 改为按消息期待的开口人数邀请，语域从 work group 放宽
+  - 成员 prompt：有话就说、未 @ 不要全员 pass、用用户的语言；干活指引保留但不绝对化
+  - send_message 增加 `pass`；interceptTool 优先看该字段
+- Files: server/src/moderator.ts, server/src/group-chat.ts, server/src/bot-manager.ts, bot-image/opt/pibot/extensions/pibot.ts
 
-### Phase 1: 修缺陷
-- **Status:** complete
-- **Started:** 2026-08-16 16:07
-- Actions taken:
-  - P0-1：`takeGroupPosts` 不再 slice；提示词改为软限制；注释写明与即时落库对齐
-  - P0-2：主持人 done 且本轮发言数为 0 时降级挑人
-  - P1-1A：`askModerator` 打 `source` / `next` / `reason`
-  - P1-1B：主持人 `maxTokens: 512`；实测 complete() 返回完整 JSON
-  - P1-2：`userTask` 改从全量 `chatLines` 取
-  - P1-3：`mergeNextNames`；`lastNext` 合并；`resolveMembersByNames` 按花名册顺序
-  - P2：简化 `fallback`；删掉 `previewLine` 的 kind；还原 `tool` 事件门禁
-  - 顺带：`attachBridgeIfNeeded` / `connected` 补拉缺失 pi 会话（否则验证跑不起来）
-  - ComputerPanel lint：deps 改为 `[bot]`
-- Files created/modified:
-  - server/src/group-chat.ts
-  - server/src/groups.ts
-  - server/src/moderator.ts
-  - server/src/bot-manager.ts
-  - web/src/components/ComputerPanel.tsx
-
-### Phase 2: 构建与部署
+### Phase 2: 上一轮缺陷
 - **Status:** complete
 - Actions taken:
-  - `npm run build`（server + web）通过
-  - `npm run lint --workspace web` 无警告
-  - 容器内扩展已含 next/done；本轮未改扩展，未 docker cp，未重建镜像
+  - resolveMembersByNames 按 names 输入顺序去重
+  - 救场：rescued + 排除 lastSpeakerId，每人一次
+  - interceptTool 单回合硬顶 8
+  - ComputerPanel 还原 `[bot?.id]` + oxlint-disable
+- Files: server/src/group-chat.ts, server/src/groups.ts, server/src/bot-manager.ts, web/src/components/ComputerPanel.tsx
 
-### Phase 3: 真实运行验证
+### Phase 3: 调查与清理
 - **Status:** complete
 - Actions taken:
-  - 重启宿主 tsx 进程加载新代码；电脑保持原容器
-  - `ps` 看到 3 个 pi；三个 Bot online
-  - 临时群 `bc8dfe6f` 跑完分工后删除；删了 workspace 测试文件
-  - 私聊 pong 成功；群轮中 abort main 未中断群聊
-- 没验证：单回合 3 条 send_message、同批双 next、handoff 起轮 userTask、主持人误判 done 的降级分支
+  - 遗留群 27149a6c / a6642635 复查时已不在列表
+  - 查清 stopBot / setModel / WS close / 容器重启路径，见 findings
+  - intended=true 且 status 非 stopped 时改写成 stopped（不自动拉起）
+  - docker cp 扩展；stop/start 三个 Bot；新 pi 7672/7673/7674
+- 镜像：改了 `bot-image/`，**新容器需要重建镜像**才带上 `pass`。现有容器已 docker cp。
+
+### Phase 4: 验证与提交
+- **Status:** complete
+- Actions taken:
+  - build + lint 通过
+  - 三个场景 + 茶水间重跑问候；私聊 pong；abort main 未杀群轮
+  - 删除临时群，清理测试 md
 
 ## Test Results
-| Test | Input | Expected | Actual | Status |
-|------|-------|----------|--------|--------|
-| tsc server | npm run build --workspace server | 通过 | 通过 | ✓ |
-| tsc+vite web | npm run build --workspace web | 通过 | 通过 | ✓ |
-| oxlint web | npm run lint --workspace web | 无警告 | 无输出 | ✓ |
-| complete() JSON | maxTokens=512, deepseek-v4-flash | 完整 JSON | 85 字符，可 parse，source=llm | ✓ |
-| 容器扩展 | grep next/done | 有参数 | 有 | ✓ |
-| pi 进程 | docker exec ps | 有 pi | 3 个 pi | ✓ |
-| 临时群分工 | Judy→Ashford→蜻蜓队长写 md | 工具卡+文件卡+next 交接+系统行 | 见 findings | ✓ |
-| 无 @ 提问 | 「这个文件现在有几节？」 | 至少一人回答 | Judy 答 3 节；source=llm | ✓ |
-| 私聊 | Judy「只回复 pong」 | 不受影响 | 回复 pong | ✓ |
-| abort main | 群轮中 abort Judy main | 群轮继续 | 三人做完 | ✓ |
-| 删临时群 | DELETE /api/groups/bc8dfe6f | 列表无此群 | 无 | ✓ |
-| 3 条 send_message | — | next 不丢 | 没构造该场景 | 没验证 |
-| 同批双 next | — | 合并去重 | 没构造该场景 | 没验证 |
-| handoff userTask | — | 全量 latestUserTask | 没跑转交起轮 | 没验证 |
-| 主持人 done@0 | — | 降级挑人 | 主持人这次返回了 next=Judy | 没验证 |
+| Test | Expected | Actual | Status |
+|------|----------|--------|--------|
+| tsc + vite + oxlint | 通过、无警告 | 通过 | ✓ |
+| 容器扩展含 pass | 有 pass: | 有 | ✓ |
+| 3 个 pi | 重启后可见 | 7672/7673/7674 | ✓ |
+| 大家好（茶水间） | 多人中文问候，无沉默正文 | 三人问候 | ✓ |
+| 大家好（verify 群名） | — | 被带跑去写 md | 污染，已重跑 |
+| 指定 Judy 写文件 | 只有 Judy 动手 | 只有 Judy | ✓ |
+| 开放讨论 | 多人表态 | 三人中文表态 | ✓ |
+| 私聊 pong | 不受影响 | pong | ✓ |
+| abort main | 不误杀群轮 | 讨论仍完成 | ✓ |
+| 8 条上限 / 救场轮询 / next 顺序 | — | 没构造场景 | 没验证 |
+| intended 假 online | — | 本次 pi 未退出 | 没验证 |
 
 ## Error Log
 | Timestamp | Error | Attempt | Resolution |
 |-----------|-------|---------|------------|
-| 16:15 | e2e DELETE 空 JSON body → Fastify 400 | 1 | 无 body 再删；群已不在列表 |
-| 16:15 | PowerShell 控制台中文乱码 | 1 | 用 node / docker UTF-8 核对 |
+| 16:36 | 「大家好」在群名 tmp-natural-verify 下变成写文件 | 1 | 换群名「茶水间」并清测试文件后重跑 |
 
 ## 5-Question Reboot Check
 | Question | Answer |
 |----------|--------|
-| Where am I? | 缺陷已修，真实验证已跑，待第二次提交 |
-| Where am I going? | 把本轮修复作为独立于基线的提交 |
-| What's the goal? | 交接信号不丢、无人发言时不误收工、主持人可观测，并且真的跑过 |
-| What have I learned? | 即时落库必须和编排器扫描范围对齐；bridge 已存在时也要补拉会话 |
+| Where am I? | 验证完成，待提交 |
+| Where am I going? | 独立提交本轮 |
+| What's the goal? | 非任务也开口；pass 结构化；修 4 个缺陷 |
+| What have I learned? | 群名/残留任务会让 Bot 把问候当干活；不要用词表纠正 |
 | What have I done? | 见上 |

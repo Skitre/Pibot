@@ -18,15 +18,16 @@ export interface ModeratorDecision {
 }
 
 const SYSTEM = [
-  "You are the silent moderator of a small Bot work group.",
-  "Decide who should act next, or whether the user's task is finished.",
+  "You are the silent moderator of a small Bot group room.",
+  "Decide who should speak or act next, or whether the conversation can stop.",
   "Reply with JSON only, no markdown:",
   '{"next":["ExactName"],"done":false,"reason":"one short sentence"}',
   "Rules:",
-  "- next names must be exact roster names.",
-  "- Prefer one next speaker. Use multiple only when they must work in sequence.",
+  "- next names must be exact roster names. Multiple names run in that order.",
+  "- Invite as many people as the latest user message calls for: one, several, or the whole roster.",
+  "- Prefer inviting one extra person over leaving the user unanswered. Members can pass; a missed invite leaves the user hanging.",
   "- Do not pick the last speaker if someone else can continue.",
-  "- done=true only when the user's task is complete or nobody can usefully continue.",
+  "- done=true only when nothing useful remains to say or do.",
   "- If done=true, next must be [].",
 ].join("\n");
 
@@ -96,7 +97,7 @@ function buildUserPrompt(input: ModeratorInput): string {
     .join("\n");
   const last = input.roster.find((member) => member.id === input.lastSpeakerId);
   return [
-    `User task:\n${input.task || "(not specified)"}`,
+    `Latest user message:\n${input.task || "(not specified)"}`,
     "",
     `Roster:\n${roster || "(none)"}`,
     "",

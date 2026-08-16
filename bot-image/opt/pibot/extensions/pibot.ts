@@ -827,26 +827,35 @@ export default function (pi: ExtensionAPI) {
     name: "send_message",
     label: "Send Message",
     description:
-      "Post progress to the current group thread. Raw assistant text is a private draft and is not shown unless you never call any tool. Set next to the teammate name(s) who should take over. Set done=true when your part is finished and nobody else needs to follow up. Use text=\"(pass)\" when you have nothing to add.",
-    promptSnippet: "Report progress to the group and hand off or mark done",
+      "Post to the current group thread. Raw assistant text is a private draft and is not shown unless you never call any tool. Set next to the teammate name(s) who should take over. Set done=true when nothing useful remains for anyone. Set pass=true when you have nothing to say this turn — text is then ignored and never shown.",
+    promptSnippet: "Speak in the group, hand off, mark done, or pass",
     promptGuidelines: [
-      "In a group, do the work first, then report with send_message.",
-      "Say what you did and what is left. Name the next teammate with next when they should take over.",
-      "Set done=true only when the user's task is finished and no teammate needs to act.",
-      'If you have nothing to do, send_message with "(pass)" or stay silent.',
+      "In a group, if there is work, do it first, then report with send_message.",
+      "If you were asked to speak and have something to say — even a short reply — send that text.",
+      "Reply in the same language the user is using.",
+      "Set pass=true only when you truly have nothing to add. Do not write that you are staying silent.",
+      "Set done=true only when nothing useful remains for anyone.",
     ],
     parameters: Type.Object({
-      text: Type.String({ description: "Progress report for the group, or (pass)" }),
+      text: Type.String({ description: "What to post in the room. Ignored when pass=true." }),
       next: Type.Optional(
         Type.Array(Type.String(), {
           description: "Exact teammate name(s) who should act next",
         }),
       ),
       done: Type.Optional(
-        Type.Boolean({ description: "True if your part is finished and nobody else needs to follow up" }),
+        Type.Boolean({ description: "True if nothing useful remains for anyone" }),
+      ),
+      pass: Type.Optional(
+        Type.Boolean({
+          description: "True if you have nothing to say this turn. text is ignored and not shown in the room.",
+        }),
       ),
     }),
     async execute(_id: string, params: any) {
+      if (params.pass === true) {
+        return { content: [textBlock("Passed.")], details: {} };
+      }
       const text = String(params.text ?? "").trim();
       if (!text || /^\(?pass\.?\)?$/i.test(text)) {
         return { content: [textBlock("Passed.")], details: {} };

@@ -10,8 +10,9 @@ import { ApprovalRuleStore } from "./approval-rules.js";
 import type { BotSkillRow } from "./skills.js";
 import { WORK_TOOLS, addMemoryNote, addWorkSummary, isMemoryKind, normalizeAgentsMd } from "./memory.js";
 import {
+  GROUP_MAX_MESSAGES_PER_TURN,
   GROUP_MEMBER_TIMEOUT_MS,
-  isPassContent,
+  isSilentPost,
   isSendMessageTool,
   parseGroupPost,
   takeGroupPosts,
@@ -950,9 +951,15 @@ export class BotManager {
         this.pushModelConfig(evt.botId);
         return;
       case "bot_exited":
-        if (!evt.intended && this.getBot(evt.botId)) {
-          this.setStatus(evt.botId, "starting"); // 桥接会自动重启
+        if (!this.getBot(evt.botId)) return;
+        if (evt.intended) {
+          // stop_bot 已把进程杀掉。宿主 stopBot 会先写成 stopped；
+          // 若这条退出没对上一次 stopBot（旧进程、状态没写上），不要继续显示 online。
+          // 不在这里自动拉起，避免用户主动停止的 Bot 复活。
+          if (this.getBot(evt.botId)?.status !== "stopped") this.setStatus(evt.botId, "stopped");
+          return;
         }
+        this.setStatus(evt.botId, "starting");
         return;
       case "bot_restarted":
         if (this.getBot(evt.botId)) this.setStatus(evt.botId, "online");
@@ -1238,10 +1245,19 @@ export class BotManager {
       if (!this.inGroupSession(botId)) return;
       const post = parseGroupPost(args);
       const live = this.live.get(botId);
-      if (live) live.groupSends.push({ ...post, persisted: !isPassContent(post.text) });
-      if (post.text && !isPassContent(post.text)) {
-        this.emitGroupPersist(botId, "text", post.text);
+      if (isSilentPost(post)) {
+        if (live) live.groupSends.push({ ...post, persisted: false });
+        return;
       }
+      const posted = live?.groupSends.filter((item) => item.persisted).length ?? 0;
+      if (posted >= GROUP_MAX_MESSAGES_PER_TURN) {
+        console.warn(
+          `[bots] ${botId} send_message dropped after ${GROUP_MAX_MESSAGES_PER_TURN} room posts this turn`,
+        );
+        return;
+      }
+      if (live) live.groupSends.push({ ...post, persisted: true });
+      if (post.text) this.emitGroupPersist(botId, "text", post.text);
       return;
     }
 
