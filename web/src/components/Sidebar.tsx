@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import type { Bot, Group } from "../types";
 import { BotAvatar } from "./BotAvatar";
+import { GroupCluster, resolveGroupMembers } from "./GroupCluster";
 import {
   PlusIcon,
   SearchIcon,
   ChevronRight,
   MoreIcon,
-  UsersIcon,
   GearIcon,
 } from "./icons";
 import { formatTime } from "../util";
@@ -27,6 +27,7 @@ interface Props {
   onNewGroup: () => void;
   onOpenSettings: () => void;
   onEditBot: (bot: Bot) => void;
+  onEditGroup: (group: Group) => void;
   onOpenMemory: (bot: Bot) => void;
 }
 
@@ -40,6 +41,7 @@ export function Sidebar({
   onNewGroup,
   onOpenSettings,
   onEditBot,
+  onEditGroup,
   onOpenMemory,
 }: Props) {
   const [query, setQuery] = useState("");
@@ -125,9 +127,11 @@ export function Sidebar({
                 onClick={() => onSelect({ kind: "group", id: g.id })}
               >
                 <div style={{ position: "relative" }}>
-                  <div style={S.groupAvatar}>
-                    <UsersIcon size={18} color="var(--text-primary)" />
-                  </div>
+                  <GroupCluster
+                    members={resolveGroupMembers(g, bots)}
+                    size={22}
+                    workingIds={groupRunBots[g.id]}
+                  />
                   {groupBusy && <span style={{ ...S.statusDot, background: "var(--accent-blue)" }} />}
                 </div>
                 <div style={S.itemBody}>
@@ -161,6 +165,14 @@ export function Sidebar({
               </button>
               {menuFor === g.id && (
                 <Menu onClose={() => setMenuFor(null)} align="right" top={44}>
+                  <MenuItem
+                    onClick={() => {
+                      setMenuFor(null);
+                      onEditGroup(g);
+                    }}
+                  >
+                    {tr("sidebar.editThread")}
+                  </MenuItem>
                   <MenuItem
                     danger
                     onClick={() => {
@@ -457,15 +469,6 @@ const S: Record<string, React.CSSProperties> = {
     marginBottom: 1,
   },
   itemActive: { background: "var(--bg-active)" },
-  groupAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: "50%",
-    background: "var(--bg-active)",
-    display: "grid",
-    placeItems: "center",
-    flexShrink: 0,
-  },
   statusDot: {
     position: "absolute",
     left: -1,

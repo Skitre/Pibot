@@ -6,6 +6,7 @@ import { GroupChatView } from "./components/GroupChatView";
 import { ComputerPanel } from "./components/ComputerPanel";
 import { CreateBotModal } from "./components/CreateBotModal";
 import { CreateGroupModal } from "./components/CreateGroupModal";
+import { EditGroupModal } from "./components/EditGroupModal";
 import { SettingsModal } from "./components/SettingsModal";
 import { EditBotModal } from "./components/EditBotModal";
 import { MemoryModal } from "./components/MemoryModal";
@@ -27,6 +28,7 @@ export default function App() {
   const [showCreateGroup, setShowCreateGroup] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [editBotId, setEditBotId] = useState<string | null>(null);
+  const [editGroupId, setEditGroupId] = useState<string | null>(null);
   const [memoryBotId, setMemoryBotId] = useState<string | null>(null);
   const [showPalette, setShowPalette] = useState(false);
 
@@ -86,6 +88,7 @@ export default function App() {
         onNewGroup={() => setShowCreateGroup(true)}
         onOpenSettings={() => setShowSettings(true)}
         onEditBot={(b) => setEditBotId(b.id)}
+        onEditGroup={(g) => setEditGroupId(g.id)}
         onOpenMemory={(b) => setMemoryBotId(b.id)}
       />
 
@@ -102,6 +105,7 @@ export default function App() {
           group={activeGroup}
           panelOpen={panelOpen}
           onTogglePanel={() => setPanelOpen((v) => !v)}
+          onEditGroup={() => setEditGroupId(activeGroup.id)}
         />
       ) : (
         <EmptyState onNew={() => setShowCreateBot(true)} />
@@ -140,6 +144,14 @@ export default function App() {
 
       {editBotId && bots.find((b) => b.id === editBotId) && (
         <EditBotModal bot={bots.find((b) => b.id === editBotId)!} onClose={() => setEditBotId(null)} />
+      )}
+
+      {editGroupId && groups.find((g) => g.id === editGroupId) && (
+        <EditGroupModal
+          group={groups.find((g) => g.id === editGroupId)!}
+          bots={bots}
+          onClose={() => setEditGroupId(null)}
+        />
       )}
 
       {memoryBotId && bots.find((b) => b.id === memoryBotId) && (

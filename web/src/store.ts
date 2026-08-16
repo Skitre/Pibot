@@ -169,9 +169,22 @@ class Store {
         this.set({ bots: [...others, msg.bot], groupMembers });
         break;
       }
-      case "bot_deleted":
-        this.set({ bots: this.state.bots.filter((b) => b.id !== msg.id) });
+      case "bot_deleted": {
+        const id = String(msg.id ?? "");
+        const groupMembers = { ...this.state.groupMembers };
+        for (const [gid, members] of Object.entries(groupMembers)) {
+          groupMembers[gid] = members.filter((m) => m.id !== id);
+        }
+        this.set({
+          bots: this.state.bots.filter((b) => b.id !== id),
+          groupMembers,
+          groups: this.state.groups.map((g) => ({
+            ...g,
+            bot_ids: (g.bot_ids ?? []).filter((botId) => botId !== id),
+          })),
+        });
         break;
+      }
       case "computer":
         this.set({ computer: msg.computer });
         break;
@@ -266,7 +279,7 @@ class Store {
       case "group_update": {
         const group = msg.group as Group | undefined;
         if (!group?.id) break;
-        this.patchGroup(group);
+        this.patchGroup(group, Array.isArray(msg.members) ? (msg.members as Bot[]) : undefined);
         break;
       }
       case "working_state": {
@@ -400,11 +413,30 @@ class Store {
     this.set({ groups });
   }
 
-  private patchGroup(group: Group) {
+  private patchGroup(group: Group, members?: Bot[]) {
     const groups = this.state.groups.some((g) => g.id === group.id)
-      ? this.state.groups.map((g) => (g.id === group.id ? { ...g, ...group } : g))
+      ? this.state.groups.map((g) =>
+          g.id === group.id
+            ? {
+                ...g,
+                ...group,
+                bot_ids: group.bot_ids ?? g.bot_ids,
+                description: group.description ?? g.description ?? "",
+              }
+            : g,
+        )
       : [...this.state.groups, group];
+    if (members) {
+      this.set({ groups, groupMembers: { ...this.state.groupMembers, [group.id]: members } });
+      return;
+    }
     this.set({ groups });
+  }
+
+  async updateGroup(groupId: string, input: { name?: string; description?: string; botIds?: string[] }) {
+    const { group, members } = await api.updateGroup(groupId, input);
+    this.patchGroup(group, members);
+    return group;
   }
 
   async updateGroupModerator(groupId: string, input: GroupModeratorInput) {

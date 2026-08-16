@@ -340,6 +340,7 @@ export function buildGroupMemberSystemPrompt(
   groupName: string,
   roster: GroupMember[],
   selfId: string,
+  description = "",
 ): string {
   const teammates = roster
     .map((member) => {
@@ -348,8 +349,10 @@ export function buildGroupMemberSystemPrompt(
       return `- @${member.name}${role}${you}`;
     })
     .join("\n");
+  const desc = description.trim();
   return [
     `You are ${botName} in the group thread "${groupName}".`,
+    ...(desc ? [`Thread description: ${desc}`] : []),
     "In the transcript, the human user is labeled User. That is not you.",
     "This pi session is only this group. Your private 1:1 with the user is a separate session. Do not mention or leak that 1:1.",
     "Shared computer, files, and memory apply to both.",
@@ -389,9 +392,10 @@ export function buildGroupSeedPrompt(
   roster: GroupMember[],
   selfId: string,
   history: ChatLine[],
+  description = "",
 ): string {
   return [
-    buildGroupMemberSystemPrompt(botName, groupName, roster, selfId),
+    buildGroupMemberSystemPrompt(botName, groupName, roster, selfId, description),
     "",
     "Group transcript so far:",
     formatChatLines(lastMessages(history, GROUP_HISTORY_WINDOW)),

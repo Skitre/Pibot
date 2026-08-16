@@ -3,7 +3,8 @@ import type { SearchHit } from "../types";
 import { api } from "../api";
 import { useStore } from "../store";
 import { BotAvatar } from "./BotAvatar";
-import { SearchIcon, UsersIcon, GearIcon, PlusIcon } from "./icons";
+import { GroupCluster, resolveGroupMembers } from "./GroupCluster";
+import { SearchIcon, GearIcon, PlusIcon } from "./icons";
 import type { Selection } from "./Sidebar";
 import { useT } from "../i18n";
 
@@ -71,7 +72,7 @@ export function CommandPalette({ onClose, onSelect, onNewBot, onOpenSettings }: 
         key: `group-${g.id}`,
         label: g.name,
         sub: tr("palette.group"),
-        icon: <UsersIcon size={16} />,
+        icon: <GroupCluster members={resolveGroupMembers(g, bots)} size={22} />,
         run: () => {
           onSelect({ kind: "group", id: g.id });
           onClose();

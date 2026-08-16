@@ -135,12 +135,18 @@ export const api = {
     fetch("/api/computer/stop", { method: "POST" }).then(j<{ computer: Computer }>),
 
   listGroups: () => fetch("/api/groups").then(j<{ groups: Group[] }>),
-  createGroup: (name: string, botIds: string[]) =>
+  createGroup: (name: string, botIds: string[], description?: string) =>
     fetch("/api/groups", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name, botIds }),
+      body: JSON.stringify({ name, botIds, description }),
     }).then(j<{ group: Group }>),
+  updateGroup: (gid: string, input: { name?: string; description?: string; botIds?: string[] }) =>
+    fetch(`/api/groups/${gid}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    }).then(j<{ group: Group; members: Bot[] }>),
   groupMessages: (gid: string) =>
     fetch(`/api/groups/${gid}/messages`).then(j<{ messages: GroupMessage[]; members: Bot[] }>),
   deleteGroup: (gid: string) => fetch(`/api/groups/${gid}`, { method: "DELETE" }),

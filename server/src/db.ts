@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS routines (
 CREATE TABLE IF NOT EXISTS groups (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL,
   moderator_name TEXT NOT NULL DEFAULT '主持人',
   moderator_profile_id TEXT,
@@ -203,6 +204,7 @@ if (!groupMessageCols.some((c) => c.name === "meta")) {
 
 const groupCols = db.prepare("PRAGMA table_info(groups)").all() as { name: string }[];
 const groupMigrations: Array<[string, string]> = [
+  ["description", "TEXT NOT NULL DEFAULT ''"],
   ["moderator_name", "TEXT NOT NULL DEFAULT '主持人'"],
   ["moderator_profile_id", "TEXT"],
   ["moderator_instructions", "TEXT NOT NULL DEFAULT ''"],

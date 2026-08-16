@@ -1,58 +1,72 @@
 import { useState } from "react";
-import type { Bot } from "../types";
-import { api } from "../api";
-import { store } from "../store";
+import type { Bot, Group } from "../types";
+import { apiErrorMessage } from "../api";
+import { store, useStore } from "../store";
 import { BotAvatar } from "./BotAvatar";
 import { CloseIcon } from "./icons";
 import { useT } from "../i18n";
 
 interface Props {
+  group: Group;
   bots: Bot[];
   onClose: () => void;
-  onCreated: (groupId: string) => void;
 }
 
 const MAX_MEMBERS = 6;
+const MIN_MEMBERS = 2;
 
-export function CreateGroupModal({ bots, onClose, onCreated }: Props) {
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [picked, setPicked] = useState<string[]>([]);
+export function EditGroupModal({ group, bots, onClose }: Props) {
+  const storedMembers = useStore((s) => s.groupMembers[group.id]);
+  const initialIds =
+    group.bot_ids?.length ? group.bot_ids : (storedMembers?.map((m) => m.id) ?? []);
+  const [name, setName] = useState(group.name);
+  const [description, setDescription] = useState(group.description ?? "");
+  const [picked, setPicked] = useState<string[]>(initialIds);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
   const tr = useT();
 
   const toggle = (id: string) =>
     setPicked((p) => {
-      if (p.includes(id)) return p.filter((x) => x !== id);
+      if (p.includes(id)) {
+        if (p.length <= MIN_MEMBERS) return p;
+        return p.filter((x) => x !== id);
+      }
       if (p.length >= MAX_MEMBERS) return p;
       return [...p, id];
     });
 
   const submit = async () => {
-    if (!name.trim() || picked.length < 2 || picked.length > MAX_MEMBERS || busy) return;
+    if (!name.trim() || picked.length < MIN_MEMBERS || picked.length > MAX_MEMBERS || busy) return;
     setBusy(true);
+    setError("");
     try {
-      const { group } = await api.createGroup(name.trim(), picked, description.trim());
-      await store.refreshGroups();
-      onCreated(group.id);
+      await store.updateGroup(group.id, {
+        name: name.trim(),
+        description: description.trim(),
+        botIds: picked,
+      });
+      onClose();
+    } catch (e) {
+      setError(apiErrorMessage(e));
     } finally {
       setBusy(false);
     }
   };
 
-  const ready = name.trim() && picked.length >= 2 && picked.length <= MAX_MEMBERS && !busy;
+  const ready = name.trim() && picked.length >= MIN_MEMBERS && picked.length <= MAX_MEMBERS && !busy;
 
   return (
     <div style={backdrop} onClick={onClose}>
       <div style={modal} onClick={(e) => e.stopPropagation()}>
         <div style={head}>
-          <span style={{ fontSize: 17, fontWeight: 600 }}>{tr("createGroup.title")}</span>
+          <span style={{ fontSize: 17, fontWeight: 600 }}>{tr("editGroup.title")}</span>
           <button style={closeBtn} onClick={onClose}>
             <CloseIcon />
           </button>
         </div>
         <div style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 16 }}>
-          {tr("createGroup.subtitle")}
+          {tr("editGroup.subtitle")}
         </div>
 
         <label style={label}>{tr("createGroup.name")}</label>
@@ -78,12 +92,14 @@ export function CreateGroupModal({ bots, onClose, onCreated }: Props) {
           {bots.map((b) => {
             const on = picked.includes(b.id);
             const blocked = !on && picked.length >= MAX_MEMBERS;
+            const last = on && picked.length <= MIN_MEMBERS;
             return (
               <button
                 key={b.id}
                 style={{ ...row, ...(on ? rowOn : {}), ...(blocked ? rowBlocked : {}) }}
                 onClick={() => toggle(b.id)}
                 disabled={blocked}
+                title={last ? tr("editGroup.minMembers") : undefined}
               >
                 <BotAvatar id={b.id} color={b.avatar_color} size={28} />
                 <span style={{ fontSize: 13.5, fontWeight: 500 }}>{b.name}</span>
@@ -93,20 +109,16 @@ export function CreateGroupModal({ bots, onClose, onCreated }: Props) {
               </button>
             );
           })}
-          {bots.length < 2 && (
-            <div style={{ fontSize: 12.5, color: "var(--text-placeholder)", padding: "10px 4px" }}>
-              {tr("createGroup.needTwo")}
-            </div>
-          )}
         </div>
         {picked.length >= MAX_MEMBERS && (
           <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 8 }}>
             {tr("createGroup.max")}
           </div>
         )}
+        {error && <div style={err}>{error}</div>}
 
-        <button style={{ ...create, opacity: ready ? 1 : 0.5 }} onClick={submit} disabled={!ready}>
-          {busy ? tr("createGroup.creating") : tr("createGroup.create")}
+        <button style={{ ...save, opacity: ready ? 1 : 0.5 }} onClick={() => void submit()} disabled={!ready}>
+          {busy ? tr("editGroup.saving") : tr("editGroup.save")}
         </button>
       </div>
     </div>
@@ -161,6 +173,7 @@ const input: React.CSSProperties = {
   padding: "9px 12px",
   fontSize: 14,
   outline: "none",
+  color: "var(--text-primary)",
 };
 const list: React.CSSProperties = {
   display: "flex",
@@ -183,7 +196,8 @@ const row: React.CSSProperties = {
 };
 const rowOn: React.CSSProperties = { borderColor: "var(--text-primary)", background: "var(--bg-active)" };
 const rowBlocked: React.CSSProperties = { opacity: 0.45 };
-const create: React.CSSProperties = {
+const err: React.CSSProperties = { fontSize: 12, color: "#ef4444", marginTop: 10 };
+const save: React.CSSProperties = {
   width: "100%",
   marginTop: 18,
   background: "var(--btn-primary-bg)",

@@ -36,6 +36,8 @@ type Broadcast = (msg: Record<string, unknown>) => void;
 interface GroupRow {
   id: string;
   name: string;
+  description?: string;
+  bot_ids?: string[];
   created_at: number;
   last_message?: string;
   last_activity?: number;
@@ -137,11 +139,46 @@ export class GroupManager {
          ORDER BY last_activity DESC`,
       )
       .all() as GroupRow[];
-    return rows.map((row) => ({ ...row, last_message: previewLine(row.last_message ?? "") }));
+    const memberIds = this.memberIdsByGroup();
+    return rows.map((row) =>
+      this.present(row, {
+        last_message: previewLine(row.last_message ?? ""),
+        bot_ids: memberIds.get(row.id) ?? [],
+      }),
+    );
   }
 
   getGroup(id: string): GroupRow | undefined {
     return db.prepare("SELECT * FROM groups WHERE id = ?").get(id) as GroupRow | undefined;
+  }
+
+  private present(row: GroupRow, extra: Partial<GroupRow> = {}): GroupRow {
+    return {
+      ...row,
+      description: row.description ?? "",
+      bot_ids: extra.bot_ids ?? this.members(row.id).map((member) => member.id),
+      ...extra,
+    };
+  }
+
+  private memberIdsByGroup(): Map<string, string[]> {
+    const rows = db
+      .prepare("SELECT group_id, bot_id FROM group_members ORDER BY rowid ASC")
+      .all() as { group_id: string; bot_id: string }[];
+    const map = new Map<string, string[]>();
+    for (const row of rows) {
+      const list = map.get(row.group_id) ?? [];
+      list.push(row.bot_id);
+      map.set(row.group_id, list);
+    }
+    return map;
+  }
+
+  private interruptQuiet(groupId: string) {
+    this.bumpEpoch(groupId);
+    this.bots.abortGroup(groupId);
+    this.setWaiting(groupId, false);
+    this.setAssigning(groupId, false);
   }
 
   members(groupId: string): BotRow[] {
@@ -152,9 +189,11 @@ export class GroupManager {
       .all(groupId) as BotRow[];
   }
 
-  createGroup(name: string, botIds: string[]): GroupRow {
+  createGroup(name: string, botIds: string[], description = ""): GroupRow {
     const title = typeof name === "string" ? name.trim() : "";
     if (!title) throw new GroupError(400, "group name is required");
+    const note = typeof description === "string" ? description.trim() : "";
+    if (note.length > 500) throw new GroupError(400, "description is too long");
     const ids = [...new Set((botIds ?? []).filter((id) => typeof id === "string" && id))];
     if (ids.length < GROUP_MIN_MEMBERS || ids.length > GROUP_MAX_MEMBERS) {
       throw new GroupError(400, "group needs 2–6 bots");
@@ -163,10 +202,76 @@ export class GroupManager {
       if (!this.bots.getBot(id)) throw new GroupError(400, `bot ${id} not found`);
     }
     const id = randomUUID().slice(0, 8);
-    db.prepare("INSERT INTO groups (id, name, created_at) VALUES (?,?,?)").run(id, title, Date.now());
+    db.prepare("INSERT INTO groups (id, name, description, created_at) VALUES (?,?,?,?)").run(
+      id,
+      title,
+      note,
+      Date.now(),
+    );
     const stmt = db.prepare("INSERT OR IGNORE INTO group_members (group_id, bot_id) VALUES (?,?)");
     for (const botId of ids) stmt.run(id, botId);
-    return db.prepare("SELECT * FROM groups WHERE id = ?").get(id) as GroupRow;
+    return this.present(this.getGroup(id)!);
+  }
+
+  updateGroup(
+    groupId: string,
+    input: { name?: string; description?: string; botIds?: string[] },
+  ): GroupRow {
+    const group = this.getGroup(groupId);
+    if (!group) throw new GroupError(404, "group not found");
+    const title = input.name === undefined ? group.name : (typeof input.name === "string" ? input.name.trim() : "");
+    if (!title) throw new GroupError(400, "group name is required");
+    const note =
+      input.description === undefined
+        ? (group.description ?? "")
+        : typeof input.description === "string"
+          ? input.description.trim()
+          : "";
+    if (note.length > 500) throw new GroupError(400, "description is too long");
+
+    let nextIds: string[] | null = null;
+    if (input.botIds !== undefined) {
+      const ids = [...new Set(input.botIds.filter((id) => typeof id === "string" && id))];
+      if (ids.length < GROUP_MIN_MEMBERS || ids.length > GROUP_MAX_MEMBERS) {
+        throw new GroupError(400, "group needs 2–6 bots");
+      }
+      for (const id of ids) {
+        if (!this.bots.getBot(id)) throw new GroupError(400, `bot ${id} not found`);
+      }
+      nextIds = ids;
+    }
+
+    const prev = this.members(groupId);
+    const prevIds = prev.map((member) => member.id);
+    const membersChanged =
+      nextIds !== null &&
+      (nextIds.length !== prevIds.length || nextIds.some((id) => !prevIds.includes(id)));
+
+    if (membersChanged) this.interruptQuiet(groupId);
+
+    db.prepare("UPDATE groups SET name = ?, description = ? WHERE id = ?").run(title, note, groupId);
+
+    if (membersChanged && nextIds) {
+      const prevSet = new Set(prevIds);
+      const nextSet = new Set(nextIds);
+      db.prepare("DELETE FROM group_members WHERE group_id = ?").run(groupId);
+      const stmt = db.prepare("INSERT OR IGNORE INTO group_members (group_id, bot_id) VALUES (?,?)");
+      for (const botId of nextIds) stmt.run(groupId, botId);
+      this.bots.dropSessionsForGroup(groupId);
+      for (const id of nextIds) {
+        if (prevSet.has(id)) continue;
+        const bot = this.bots.getBot(id);
+        if (bot) this.saveGroupMessage(groupId, "System", `${bot.name} joined the thread.`, null, "system");
+      }
+      for (const member of prev) {
+        if (nextSet.has(member.id)) continue;
+        this.saveGroupMessage(groupId, "System", `${member.name} left the thread.`, null, "system");
+      }
+    }
+
+    const next = this.present(this.getGroup(groupId)!);
+    this.broadcast({ type: "group_update", group: next, members: this.members(groupId) });
+    return next;
   }
 
   updateModerator(groupId: string, input: GroupModeratorInput): GroupRow {
@@ -183,8 +288,8 @@ export class GroupManager {
       `UPDATE groups SET moderator_name = ?, moderator_profile_id = ?, moderator_instructions = ?,
        moderator_max_tokens = ?, moderator_history = ?, moderator_thinking = ? WHERE id = ?`,
     ).run(name, profileId, instructions, maxTokens, history, thinking, groupId);
-    const next = this.getGroup(groupId)!;
-    this.broadcast({ type: "group_update", group: next });
+    const next = this.present(this.getGroup(groupId)!);
+    this.broadcast({ type: "group_update", group: next, members: this.members(groupId) });
     return next;
   }
 
@@ -572,7 +677,7 @@ export class GroupManager {
     const lines = this.promptLines(groupId);
     const roster = this.members(groupId);
     const prompt = seed
-      ? buildGroupSeedPrompt(bot.name, group.name, roster, bot.id, lines)
+      ? buildGroupSeedPrompt(bot.name, group.name, roster, bot.id, lines, group.description ?? "")
       : buildGroupTurnPrompt(
           bot.name,
           group.name,

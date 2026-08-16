@@ -236,8 +236,23 @@ app.post("/api/routines/:rid/run", async (req, reply) => {
 app.get("/api/groups", async () => ({ groups: groups.listGroups() }));
 app.post("/api/groups", async (req, reply) => {
   try {
-    const { name, botIds } = req.body as { name: string; botIds: string[] };
-    return { group: groups.createGroup(name, botIds) };
+    const { name, botIds, description } = req.body as {
+      name: string;
+      botIds: string[];
+      description?: string;
+    };
+    return { group: groups.createGroup(name, botIds, description) };
+  } catch (err) {
+    if (err instanceof GroupError) return reply.code(err.statusCode).send({ error: err.message });
+    throw err;
+  }
+});
+app.put("/api/groups/:gid", async (req, reply) => {
+  try {
+    const { gid } = req.params as { gid: string };
+    const body = (req.body ?? {}) as { name?: string; description?: string; botIds?: string[] };
+    const group = groups.updateGroup(gid, body);
+    return { group, members: groups.members(gid) };
   } catch (err) {
     if (err instanceof GroupError) return reply.code(err.statusCode).send({ error: err.message });
     throw err;

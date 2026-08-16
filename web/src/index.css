@@ -534,6 +534,9 @@ textarea::placeholder {
 .side-item:hover {
   background: var(--bg-hover);
 }
+.group-title-btn:hover {
+  background: var(--bg-hover);
+}
 
 /* 消息气泡：悬停时才显示操作按钮（复制等） */
 .msg-row .msg-act {

@@ -88,6 +88,8 @@ export interface ProfileInput {
 export interface Group {
   id: string;
   name: string;
+  description?: string;
+  bot_ids?: string[];
   created_at: number;
   last_message?: string;
   last_activity?: number;

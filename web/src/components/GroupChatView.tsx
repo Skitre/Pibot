@@ -4,6 +4,7 @@ import { store, useStore } from "../store";
 import { api } from "../api";
 import { Composer } from "./Composer";
 import { BotAvatar } from "./BotAvatar";
+import { GroupCluster } from "./GroupCluster";
 import { FileCard, WorkLog } from "./Messages";
 import { Markdown } from "./Markdown";
 import { formatDayDivider } from "../util";
@@ -15,6 +16,7 @@ interface Props {
   group: Group;
   panelOpen: boolean;
   onTogglePanel: () => void;
+  onEditGroup: () => void;
 }
 
 const EMPTY_MESSAGES: GroupMessage[] = [];
@@ -22,7 +24,7 @@ const EMPTY_MEMBERS: Bot[] = [];
 
 // 群聊线程：独立 transcript，不写成员私聊。
 // 用户 @ 指定；Bot 用 send_message next/done 交接；否则主持人判断。
-export function GroupChatView({ group, panelOpen, onTogglePanel }: Props) {
+export function GroupChatView({ group, panelOpen, onTogglePanel, onEditGroup }: Props) {
   const messages = useStore((s) => s.groupMessages[group.id]) ?? EMPTY_MESSAGES;
   const members = useStore((s) => s.groupMembers[group.id]) ?? EMPTY_MEMBERS;
   const working = useStore((s) => s.working);
@@ -30,7 +32,6 @@ export function GroupChatView({ group, panelOpen, onTogglePanel }: Props) {
   const assigning = useStore((s) => !!s.groupAssigning[group.id]);
   const waiting = useStore((s) => !!s.groupWaiting[group.id]);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [listening, setListening] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [moderatorOpen, setModeratorOpen] = useState(false);
   const tr = useT();
@@ -61,24 +62,23 @@ export function GroupChatView({ group, panelOpen, onTogglePanel }: Props) {
   return (
     <div style={root}>
       <div style={header}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-          <div style={{ display: "flex" }}>
-            {members.slice(0, 3).map((m, i) => (
-              <div key={m.id} style={{ marginLeft: i === 0 ? 0 : -8, zIndex: 3 - i }}>
-                <BotAvatar
-                  id={m.id}
-                  color={m.avatar_color}
-                  size={24}
-                  status={m.status}
-                  working={busy.some((b) => b.id === m.id)}
-                  listening={listening}
-                />
-              </div>
-            ))}
+        <button className="group-title-btn" style={titleBtn} onClick={onEditGroup} title={tr("sidebar.editThread")}>
+          <GroupCluster
+            members={members}
+            size={24}
+            overlap={8}
+            workingIds={busy.map((b) => b.id)}
+          />
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 15, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {group.name}
+            </div>
+            {group.description?.trim() ? (
+              <div style={descLine}>{group.description}</div>
+            ) : null}
           </div>
-          <span style={{ fontSize: 15, fontWeight: 600 }}>{group.name}</span>
           <span style={memberCount}>{tr("group.bots", { n: members.length })}</span>
-        </div>
+        </button>
         <div style={{ display: "flex", gap: 4, alignItems: "center", position: "relative" }}>
           <ThemeToggle />
           <button
@@ -144,7 +144,6 @@ export function GroupChatView({ group, panelOpen, onTogglePanel }: Props) {
         mentionNames={mentionNames}
         working={busy.length > 0 || assigning}
         busy={uploading}
-        onFocusChange={setListening}
         onStop={() => store.abortGroup(group.id)}
         onSend={async (text, files) => {
           if (files.length === 0) {
@@ -413,13 +412,31 @@ const root: React.CSSProperties = {
   background: "var(--bg-main)",
 };
 const header: React.CSSProperties = {
-  height: 52,
   minHeight: 52,
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
-  padding: "0 16px",
+  padding: "8px 16px",
   borderBottom: "1px solid var(--border-subtle)",
+};
+const titleBtn: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  minWidth: 0,
+  padding: "2px 6px 2px 2px",
+  marginLeft: -2,
+  borderRadius: 8,
+  textAlign: "left",
+  color: "inherit",
+};
+const descLine: React.CSSProperties = {
+  fontSize: 11.5,
+  color: "var(--text-secondary)",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  maxWidth: 280,
 };
 const hIconBtn: React.CSSProperties = {
   width: 32,
