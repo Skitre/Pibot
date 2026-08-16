@@ -20,6 +20,7 @@ import {
   lastMessages,
   lastPostSignal,
   latestUserTask,
+  mentionNamesFromPosts,
   mergeNextNames,
   messagesSinceLastSpoke,
   resolveMembersByNames,
@@ -118,6 +119,7 @@ export class GroupManager {
   private speaking = new Map<string, string>();
   private turnOrigin = new Map<string, "user" | "handoff">();
   private assigning = new Set<string>();
+  private waiting = new Set<string>();
 
   listGroups(): GroupRow[] {
     const rows = db
@@ -202,6 +204,7 @@ export class GroupManager {
     this.activeLoop.delete(groupId);
     this.turnOrigin.delete(groupId);
     this.setAssigning(groupId, false);
+    this.setWaiting(groupId, false);
     for (const [botId, gid] of this.speaking) {
       if (gid === groupId) this.speaking.delete(botId);
     }
@@ -213,6 +216,7 @@ export class GroupManager {
     if (!this.getGroup(groupId)) return;
     this.bumpEpoch(groupId);
     this.bots.abortGroup(groupId);
+    this.setWaiting(groupId, false);
     this.saveGroupMessage(groupId, "System", "Stopped.", null, "system");
   }
 
@@ -223,6 +227,7 @@ export class GroupManager {
     if (!content && files.length === 0) return;
     this.bumpEpoch(groupId);
     this.bots.abortGroup(groupId);
+    this.setWaiting(groupId, false);
     this.turnOrigin.set(groupId, "user");
     if (content) this.saveGroupMessage(groupId, "You", content, null);
     for (const file of files) {
@@ -286,6 +291,22 @@ export class GroupManager {
     return [...this.assigning];
   }
 
+  waitingGroups(): string[] {
+    return [...this.waiting];
+  }
+
+  private setWaiting(groupId: string, on: boolean) {
+    if (on) this.waiting.add(groupId);
+    else this.waiting.delete(groupId);
+    this.broadcast({ type: "group_wait", groupId, waiting: on });
+  }
+
+  private waitForUser(groupId: string, epoch: number) {
+    if (!this.isCurrent(groupId, epoch)) return;
+    this.setWaiting(groupId, true);
+    console.log(`[groups] ${groupId} waiting for user`);
+  }
+
   private setAssigning(groupId: string, on: boolean) {
     if (on) this.assigning.add(groupId);
     else this.assigning.delete(groupId);
@@ -327,6 +348,7 @@ export class GroupManager {
     const epoch = this.currentEpoch(groupId);
     if (!this.isCurrent(groupId, epoch)) return;
     this.activeLoop.set(groupId, epoch);
+    this.setWaiting(groupId, false);
     this.broadcast({
       type: "group_run",
       groupId,
@@ -353,7 +375,7 @@ export class GroupManager {
       origin === "handoff"
         ? this.handoffTargets(members0, opening)
         : resolveResponders(members0, opening);
-    let pending: { next: string[]; done: boolean } | null = null;
+    let pending: { next: string[]; done: boolean; askUser: boolean } | null = null;
 
     try {
       while (true) {
@@ -369,6 +391,10 @@ export class GroupManager {
           return;
         }
 
+        if (pending?.askUser) {
+          this.waitForUser(groupId, epoch);
+          return;
+        }
         if (pending?.done) {
           this.stopWith(groupId, epoch, "Task complete.");
           return;
@@ -387,7 +413,7 @@ export class GroupManager {
           const decision = await this.askModerator(groupId, state, members);
           if (!this.isCurrent(groupId, epoch)) return;
           const spoken = [...state.speakCount.values()].reduce((sum, n) => sum + n, 0);
-          if ((decision.done || decision.next.length === 0) && spoken === 0) {
+          if ((decision.done || decision.askUser || decision.next.length === 0) && spoken === 0) {
             const pool = members.filter(
               (member) => !state.rescued.has(member.id) && member.id !== state.lastSpeakerId,
             );
@@ -402,6 +428,9 @@ export class GroupManager {
             );
             this.noteAssignment(groupId, `先请 ${pick.name} 开口。`);
             queue = [pick];
+          } else if (decision.askUser) {
+            this.waitForUser(groupId, epoch);
+            return;
           } else if (decision.done || decision.next.length === 0) {
             this.stopWith(groupId, epoch, decision.reason || "No one left to speak.");
             return;
@@ -439,11 +468,16 @@ export class GroupManager {
           if (spoken > 0) state.lastSpeakerId = bot.id;
           state.speakCount.set(bot.id, (state.speakCount.get(bot.id) ?? 0) + spoken);
           const signal = lastPostSignal(posts);
+          if (signal.askUser) {
+            this.waitForUser(groupId, epoch);
+            return;
+          }
           if (signal.done) {
             batchDone = true;
             break;
           }
           if (signal.next.length) lastNext = mergeNextNames(lastNext, signal.next);
+          lastNext = mergeNextNames(lastNext, mentionNamesFromPosts(members, posts, bot.id));
         }
 
         if (batchDone) {
@@ -459,7 +493,7 @@ export class GroupManager {
             return;
           }
         }
-        if (lastNext.length) pending = { next: lastNext, done: false };
+        if (lastNext.length) pending = { next: lastNext, done: false, askUser: false };
       }
     } finally {
       this.setAssigning(groupId, false);
@@ -509,7 +543,7 @@ export class GroupManager {
         },
       );
       console.log(
-        `[groups] ${groupId} moderator source=${decision.source} next=[${decision.next.join(",")}] reason=${decision.reason}`,
+        `[groups] ${groupId} moderator source=${decision.source} next=[${decision.next.join(",")}] ask_user=${decision.askUser} reason=${decision.reason}`,
       );
       return decision;
     } finally {

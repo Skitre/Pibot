@@ -36,6 +36,7 @@ interface State {
   groupRunning: Record<string, boolean>;
   groupRunBots: Record<string, string[]>;
   groupAssigning: Record<string, boolean>;
+  groupWaiting: Record<string, boolean>;
   botSkillEpoch: number;
 }
 
@@ -62,6 +63,7 @@ class Store {
     groupRunning: {},
     groupRunBots: {},
     groupAssigning: {},
+    groupWaiting: {},
     botSkillEpoch: 0,
   };
   private listeners = new Set<Listener>();
@@ -221,12 +223,14 @@ class Store {
         const groupRunning = { ...this.state.groupRunning, [msg.groupId]: !!msg.running };
         const groupRunBots = { ...this.state.groupRunBots };
         const groupAssigning = { ...this.state.groupAssigning };
+        const groupWaiting = { ...this.state.groupWaiting };
         if (msg.running && Array.isArray(msg.botIds)) groupRunBots[msg.groupId] = msg.botIds;
+        if (msg.running) delete groupWaiting[msg.groupId];
         if (!msg.running) {
           delete groupRunBots[msg.groupId];
           delete groupAssigning[msg.groupId];
         }
-        this.set({ groupRunning, groupRunBots, groupAssigning });
+        this.set({ groupRunning, groupRunBots, groupAssigning, groupWaiting });
         break;
       }
       case "group_moderator_state": {
@@ -242,6 +246,21 @@ class Store {
         const groupAssigning = { ...this.state.groupAssigning, [groupId]: !!msg.assigning };
         if (!msg.assigning) delete groupAssigning[groupId];
         this.set({ groupAssigning });
+        break;
+      }
+      case "group_wait_state": {
+        const groupWaiting: Record<string, boolean> = {};
+        const ids = Array.isArray(msg.groupIds) ? (msg.groupIds as string[]) : [];
+        for (const id of ids) groupWaiting[id] = true;
+        this.set({ groupWaiting });
+        break;
+      }
+      case "group_wait": {
+        const groupId = String(msg.groupId ?? "");
+        if (!groupId) break;
+        const groupWaiting = { ...this.state.groupWaiting, [groupId]: !!msg.waiting };
+        if (!msg.waiting) delete groupWaiting[groupId];
+        this.set({ groupWaiting });
         break;
       }
       case "group_update": {
@@ -313,12 +332,15 @@ class Store {
         delete groupRunBots[msg.id];
         const groupAssigning = { ...this.state.groupAssigning };
         delete groupAssigning[msg.id];
+        const groupWaiting = { ...this.state.groupWaiting };
+        delete groupWaiting[msg.id];
         this.set({
           groups: this.state.groups.filter((g) => g.id !== msg.id),
           groupUnread,
           groupRunning,
           groupRunBots,
           groupAssigning,
+          groupWaiting,
         });
         break;
       }

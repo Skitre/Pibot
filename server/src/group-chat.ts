@@ -1,4 +1,5 @@
 // 群聊纯核心：无 IO。房间是共享 transcript；谁开口由编排器按轮次驱动。
+import { AUTONOMY } from "./prompts/sections.js";
 
 export const GROUP_MIN_MEMBERS = 2;
 export const GROUP_MAX_MEMBERS = 6;
@@ -29,6 +30,7 @@ export interface GroupPost {
   next: string[];
   done: boolean;
   pass: boolean;
+  askUser: boolean;
   persisted?: boolean;
 }
 
@@ -61,6 +63,26 @@ export function mentionedMembers<T extends GroupMember>(members: T[], text: stri
   return members.filter((member) =>
     mentionKeysFor(member.name, names).some((key) => mentionRe(key).test(text)),
   );
+}
+
+/** Visible posts only. @Name / @everyone pull teammates the same way next does. */
+export function mentionNamesFromPosts(
+  members: GroupMember[],
+  posts: GroupPost[],
+  exceptId?: string,
+): string[] {
+  const names: string[] = [];
+  for (const post of posts) {
+    if (isSilentPost(post)) continue;
+    const hits = hasEveryoneMention(post.text)
+      ? members
+      : mentionedMembers(members, post.text);
+    for (const member of hits) {
+      if (exceptId && member.id === exceptId) continue;
+      names.push(member.name);
+    }
+  }
+  return names;
 }
 
 export function isPassContent(text: string): boolean {
@@ -103,6 +125,7 @@ export function parseGroupPost(args: unknown): GroupPost {
     next: normalizeNameList(record.next),
     done: record.done === true || record.done === "true",
     pass: record.pass === true || record.pass === "true",
+    askUser: record.ask_user === true || record.ask_user === "true" || record.askUser === true,
   };
 }
 
@@ -113,7 +136,7 @@ export function takeGroupPosts(sends: GroupPost[], fallback?: string): GroupPost
   if (sends.length > 0) return sends;
   const draft = (fallback ?? "").trim();
   if (!draft || isPassContent(draft)) return [];
-  return [{ text: draft, next: [], done: false, pass: false }];
+  return [{ text: draft, next: [], done: false, pass: false, askUser: false }];
 }
 
 export function mergeNextNames(into: string[], extra: string[]): string[] {
@@ -128,14 +151,17 @@ export function mergeNextNames(into: string[], extra: string[]): string[] {
   return out;
 }
 
-export function lastPostSignal(posts: GroupPost[]): { next: string[]; done: boolean } {
+export function lastPostSignal(posts: GroupPost[]): { next: string[]; done: boolean; askUser: boolean } {
   let next: string[] = [];
   let done = false;
+  let askUser = false;
   for (const post of posts) {
     if (post.done) done = true;
     if (post.next.length) next = mergeNextNames(next, post.next);
+    // pass 没有正文，问人无效。
+    if (post.askUser && !isSilentPost(post)) askUser = true;
   }
-  return { next, done };
+  return { next, done, askUser };
 }
 
 /** 模型常把花名册整行抄回来（「名字 — 角色」「名字（角色）」），精确匹配不到就退到分隔符前一段。 */
@@ -204,7 +230,7 @@ export function sliceFromLatestHandoff(lines: ChatLine[]): ChatLine[] {
   return start < 0 ? sliceFromLatestUser(lines) : lines.slice(start);
 }
 
-/** 只处理显式 @ / @everyone。无 @ 返回空，交给主持人。 */
+/** 开场只看用户（或 handoff）那一句的 @ / @everyone。无 @ 返回空，交给主持人。成员正文里的 @ 由 mentionNamesFromPosts 并进 next。 */
 export function resolveResponders<T extends GroupMember>(
   members: T[],
   turnLines: ChatLine[],
@@ -334,8 +360,15 @@ export function buildGroupMemberSystemPrompt(
     "If you were asked to speak and you have something to say — even a short reply to the user — send_message with that text. Set pass=true only when you truly have nothing to add; the text is then ignored and never shown.",
     "If the user just wrote to the group and did not @ anyone, answer them. Do not all pass and leave the user hanging.",
     "Reply in the same language the user is using.",
-    "When your part is ready for a teammate, set next to their exact name(s). When nothing useful remains for anyone, set done=true.",
-    "Address a teammate with @Name only as extra context; the orchestrator follows send_message next/done, not @ guesses.",
+    "How you talk in the room:",
+    "- Keep each message short and conversational — usually one to three sentences. Do not monologue or summarize the whole thread.",
+    "- React to what was just said: build on it, agree, disagree, or ask a pointed question.",
+    "- Write @Name to pull that teammate in, or @everyone for the whole room. The orchestrator follows @ in your post the same way it follows next. You may still set next to their exact name(s).",
+    "- Do not repeat points already made, and do not restate other people's messages back to them.",
+    "- If you have nothing new worth adding, set pass=true. Staying quiet is good — it lets the conversation settle.",
+    AUTONOMY,
+    "If they asked for prep, deliver that and set done=true instead of launching extra workstreams.",
+    "When nothing useful remains for anyone, set done=true.",
     "Prefer one or two room posts this turn. Put next, done, or pass on your last send_message — later posts still count.",
   ].join("\n");
 }
@@ -346,7 +379,7 @@ export function buildGroupTurnPrompt(botName: string, groupName: string, newLine
     "",
     formatChatLines(newLines),
     "",
-    "If you have something to say, send_message in the user's language. Set pass=true only when you have nothing to add. Set next to a teammate who should continue, or done=true when nothing useful remains.",
+    "If you have something to say, send_message in the user's language — short, a reaction to what was just said, no recap. Write @Name to pull a teammate in. Set pass=true only when you have nothing to add. Set next to a teammate who should continue. Set ask_user=true only for a consequential/undo-hard action, true ambiguity you cannot look up, or something only the user knows — otherwise decide, proceed, and mention the assumption. Set done=true when nothing useful remains.",
   ].join("\n");
 }
 
@@ -363,6 +396,6 @@ export function buildGroupSeedPrompt(
     "Group transcript so far:",
     formatChatLines(lastMessages(history, GROUP_HISTORY_WINDOW)),
     "",
-    "If you have something to say, send_message in the user's language. Set pass=true only when you have nothing to add. Set next to a teammate who should continue, or done=true when nothing useful remains.",
+    "If you have something to say, send_message in the user's language — short, a reaction to what was just said, no recap. Write @Name to pull a teammate in. Set pass=true only when you have nothing to add. Set next to a teammate who should continue. Set ask_user=true only for a consequential/undo-hard action, true ambiguity you cannot look up, or something only the user knows — otherwise decide, proceed, and mention the assumption. Set done=true when nothing useful remains.",
   ].join("\n");
 }

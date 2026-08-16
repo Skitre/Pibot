@@ -1,4 +1,4 @@
-/** 自己的分配：同 id 同外观。机制对照 bot-mark-kit/SPEC.md，实现不引用官方 bundle。 */
+/** 自己的分配：同 id 同外观。 */
 
 export const MARK_SHAPES = [
   "blob",

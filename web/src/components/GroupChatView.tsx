@@ -27,6 +27,7 @@ export function GroupChatView({ group, panelOpen, onTogglePanel }: Props) {
   const working = useStore((s) => s.working);
   const workingChannel = useStore((s) => s.workingChannel);
   const assigning = useStore((s) => !!s.groupAssigning[group.id]);
+  const waiting = useStore((s) => !!s.groupWaiting[group.id]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [listening, setListening] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -44,7 +45,7 @@ export function GroupChatView({ group, panelOpen, onTogglePanel }: Props) {
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, busy.length, assigning]);
+  }, [messages, busy.length, assigning, waiting]);
 
   const mentionNames = useMemo(
     () => [...members.map((m) => m.name), "everyone"],
@@ -114,6 +115,13 @@ export function GroupChatView({ group, panelOpen, onTogglePanel }: Props) {
             <div style={{ display: "flex", alignItems: "center", gap: 9, margin: "6px 2px" }}>
               <span style={{ fontSize: 12.5, color: "var(--text-secondary)" }}>
                 {tr("group.assigning", { name: hostName })}
+              </span>
+            </div>
+          )}
+          {waiting && !assigning && busy.length === 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 9, margin: "6px 2px" }}>
+              <span style={{ fontSize: 12.5, color: "var(--text-secondary)" }}>
+                {tr("group.waiting")}
               </span>
             </div>
           )}

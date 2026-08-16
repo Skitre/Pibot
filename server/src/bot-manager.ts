@@ -25,6 +25,7 @@ import {
   resolveWorkspacePath,
   toolWritePath,
 } from "./workspace-files.js";
+import { buildAppendSystemPrompt } from "./prompts/sections.js";
 
 type Broadcast = (msg: Record<string, unknown>) => void;
 
@@ -77,6 +78,7 @@ export function parseBotLook(input: { avatar_color?: unknown; avatar_shape?: unk
 // 共享电脑架构（对齐官方）：整个账户一台容器，Bot 的 pi 进程都在里面。
 // 每个 Bot 的私有目录（记忆/设置）在 /config/bots/<id>/，共享工作区在 /config/workspace。
 const memoryPath = (botId: string) => `/config/bots/${botId}/AGENTS.md`;
+const appendSystemPath = (botId: string) => `/config/bots/${botId}/.pi/agent/APPEND_SYSTEM.md`;
 const FILE_CARD_CAP = 12;
 
 export interface Attachment {
@@ -554,7 +556,7 @@ export class BotManager {
 
   private startEligibleBotSessions() {
     for (const bot of this.listBots()) {
-      if (bot.status !== "stopped") this.startBotSession(bot.id);
+      if (bot.status !== "stopped") this.kickBotSession(bot.id);
     }
   }
 
@@ -631,8 +633,25 @@ export class BotManager {
     }
   }
 
+  /** Host 规则：每次启动都覆盖写入，pi 读 ~/.pi/agent/APPEND_SYSTEM.md。 */
+  private async writeAppendSystem(botId: string): Promise<void> {
+    const cid = this.computer.containerId ?? (await this.requireComputer());
+    await this.docker.writeFile(
+      cid,
+      appendSystemPath(botId),
+      Buffer.from(buildAppendSystemPrompt(), "utf8"),
+    );
+  }
+
+  private kickBotSession(botId: string) {
+    void this.startBotSession(botId).catch((err) => {
+      console.warn(`[bots] start ${botId} failed: ${(err as Error).message}`);
+      this.setStatus(botId, "error");
+    });
+  }
+
   /** 在共享电脑里启动某个 Bot 的 pi 会话 */
-  private startBotSession(botId: string) {
+  private async startBotSession(botId: string) {
     const bot = this.getBot(botId);
     if (!bot || !this.bridge) return;
     const model = this.containerConfigForBot(bot);
@@ -642,6 +661,13 @@ export class BotManager {
     }
     if (!this.live.has(botId)) this.live.set(botId, newLive());
     this.setStatus(botId, "starting");
+    try {
+      await this.writeAppendSystem(botId);
+    } catch (err) {
+      console.warn(`[bots] APPEND_SYSTEM.md for ${botId}: ${(err as Error).message}`);
+      this.setStatus(botId, "error");
+      return;
+    }
     this.bridge.send({
       type: "_pibot",
       cmd: "start_bot",
@@ -676,7 +702,7 @@ export class BotManager {
 
     try {
       await this.ensureComputer();
-      this.startBotSession(id);
+      await this.startBotSession(id);
     } catch (err) {
       this.setStatus(id, "error");
       this.saveMessage(id, "system", `Failed to start the computer: ${(err as Error).message}`, "system");
@@ -686,7 +712,7 @@ export class BotManager {
 
   async startBot(id: string) {
     await this.ensureComputer();
-    this.startBotSession(id);
+    await this.startBotSession(id);
   }
 
   async stopBot(id: string) {
@@ -938,7 +964,7 @@ export class BotManager {
           this.setStatus(id, "online");
         }
         for (const bot of this.listBots()) {
-          if (bot.status !== "stopped" && !running.has(bot.id)) this.startBotSession(bot.id);
+          if (bot.status !== "stopped" && !running.has(bot.id)) this.kickBotSession(bot.id);
         }
         return;
       }

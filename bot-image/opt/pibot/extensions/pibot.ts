@@ -827,13 +827,18 @@ export default function (pi: ExtensionAPI) {
     name: "send_message",
     label: "Send Message",
     description:
-      "Post to the current group thread. Raw assistant text is a private draft and is not shown unless you never call any tool. Set next to the teammate name(s) who should take over. Set done=true when nothing useful remains for anyone. Set pass=true when you have nothing to say this turn — text is then ignored and never shown.",
-    promptSnippet: "Speak in the group, hand off, mark done, or pass",
+      "Post to the current group thread. Raw assistant text is a private draft and is not shown unless you never call any tool. Keep it short. Write @Name in the text to pull that teammate in — same as next. Set next to the teammate name(s) who should take over. Set ask_user=true only for a consequential/undo-hard action, true ambiguity you cannot look up, or something only the user knows — the room then waits. Set done=true when nothing useful remains for anyone. Set pass=true when you have nothing to say this turn — text is then ignored and never shown.",
+    promptSnippet: "Speak in the group, hand off, ask the user, mark done, or pass",
     promptGuidelines: [
       "In a group, if there is work, do it first, then report with send_message.",
       "If you were asked to speak and have something to say — even a short reply — send that text.",
+      "Keep each message short and conversational — usually one to three sentences. React to what was just said. Do not monologue, recap the thread, or restate other people.",
+      "Write @Name in the post to pull that teammate in, or @everyone for the whole room. next is optional.",
       "Reply in the same language the user is using.",
-      "Set pass=true only when you truly have nothing to add. Do not write that you are staying silent.",
+      "Set pass=true only when you truly have nothing to add. Staying quiet is good. Do not write that you are staying silent.",
+      "Default is to act, not to ask. For naming, defaults, or equivalent approaches: pick one, do it, and mention the assumption.",
+      "ask_user=true is earned by only three things: a consequential or hard-to-undo action; true ambiguity you cannot look up; or something only the user knows. A low-stakes question is worse than a reasonable assumption. Before asking, try the obvious thing or a quick lookup. A brief \"want me to also…?\" offer is not ask_user.",
+      "Do not set next so a teammate decides one of those three cases in the user's place.",
       "Set done=true only when nothing useful remains for anyone.",
     ],
     parameters: Type.Object({
@@ -841,6 +846,12 @@ export default function (pi: ExtensionAPI) {
       next: Type.Optional(
         Type.Array(Type.String(), {
           description: "Exact teammate name(s) who should act next",
+        }),
+      ),
+      ask_user: Type.Optional(
+        Type.Boolean({
+          description:
+            "True only for a consequential/undo-hard action, true ambiguity you cannot look up, or something only the user knows. text is the question shown in the room; the room then waits.",
         }),
       ),
       done: Type.Optional(

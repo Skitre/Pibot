@@ -483,6 +483,7 @@ app.get("/ws", { websocket: true }, (socket) => {
   ws.send(JSON.stringify({ type: "working_state", bots: bots.workingSnapshot() }));
   ws.send(JSON.stringify({ type: "group_run_state", groups: groups.runningGroups() }));
   ws.send(JSON.stringify({ type: "group_moderator_state", groupIds: groups.assigningGroups() }));
+  ws.send(JSON.stringify({ type: "group_wait_state", groupIds: groups.waitingGroups() }));
   ws.send(JSON.stringify({ type: "computer", computer: bots.getComputer() }));
 
   ws.on("message", (raw: Buffer) => {
