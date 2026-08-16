@@ -32,15 +32,14 @@ const SYSTEM = [
 
 function fallback(input: ModeratorInput): ModeratorDecision {
   const unspoken = input.roster.filter((member) => (input.speakCounts[member.id] ?? 0) === 0);
-  const pool = unspoken.length > 0 ? unspoken : [];
-  const guarded = guardNextMembers(pool, input.lastSpeakerId ?? null);
+  const guarded = guardNextMembers(unspoken, input.lastSpeakerId ?? null);
   if (guarded.length === 0) {
     return { next: [], done: true, reason: "No one left to speak.", source: "fallback" };
   }
   return {
     next: [guarded[0].name],
     done: false,
-    reason: unspoken.length > 0 ? `Ask ${guarded[0].name}, who has not spoken yet.` : `Ask ${guarded[0].name}.`,
+    reason: `Ask ${guarded[0].name}, who has not spoken yet.`,
     source: "fallback",
   };
 }
@@ -122,7 +121,7 @@ export async function moderate(profiles: ModelProfileStore, input: ModeratorInpu
         { role: "system", content: SYSTEM },
         { role: "user", content: buildUserPrompt(input) },
       ],
-      { maxTokens: 256, timeoutMs: 15_000 },
+      { maxTokens: 512, timeoutMs: 15_000 },
     );
     if (!result.ok) return fallback(input);
     const parsed = parseDecision(result.text);

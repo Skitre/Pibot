@@ -31,7 +31,7 @@ export function ComputerPanel({ bot, onClose }: Props) {
       return;
     }
     api.routines(bot.id).then((r) => setRoutines(r.routines));
-  }, [bot?.id]);
+  }, [bot]);
 
   useEffect(() => {
     if (!menuOpen) return;

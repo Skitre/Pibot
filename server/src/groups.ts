@@ -20,6 +20,7 @@ import {
   lastMessages,
   lastPostSignal,
   latestUserTask,
+  mergeNextNames,
   messagesSinceLastSpoke,
   resolveMembersByNames,
   resolveResponders,
@@ -61,8 +62,7 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function previewLine(text: string, kind = "text"): string {
-  if (kind === "tool") return "[tool]";
+function previewLine(text: string): string {
   const one = text.replace(/\s+/g, " ").trim();
   return one.length > 80 ? `${one.slice(0, 80)}…` : one;
 }
@@ -280,7 +280,7 @@ export class GroupManager {
       moderatorCalls: 0,
       speakCount: new Map(),
       lastSpeakerId: null,
-      userTask: latestUserTask(opening),
+      userTask: latestUserTask(this.chatLines(groupId)),
     };
 
     let queue =
@@ -320,11 +320,19 @@ export class GroupManager {
           state.moderatorCalls += 1;
           const decision = await this.askModerator(groupId, state, members);
           if (!this.isCurrent(groupId, epoch)) return;
-          if (decision.done || decision.next.length === 0) {
+          const spoken = [...state.speakCount.values()].reduce((sum, n) => sum + n, 0);
+          if ((decision.done || decision.next.length === 0) && spoken === 0) {
+            const pick = members.find((member) => (state.speakCount.get(member.id) ?? 0) === 0) ?? members[0];
+            console.log(
+              `[groups] ${groupId} moderator done ignored (no member posts yet), pick ${pick?.name ?? "?"}`,
+            );
+            queue = pick ? [pick] : [];
+          } else if (decision.done || decision.next.length === 0) {
             this.stopWith(groupId, epoch, decision.reason || "No one left to speak.");
             return;
+          } else {
+            queue = resolveMembersByNames(members, decision.next);
           }
-          queue = resolveMembersByNames(members, decision.next);
         }
 
         if (queue.length === 0) {
@@ -354,7 +362,7 @@ export class GroupManager {
             batchDone = true;
             break;
           }
-          if (signal.next.length) lastNext = signal.next;
+          if (signal.next.length) lastNext = mergeNextNames(lastNext, signal.next);
         }
 
         if (batchDone) {
@@ -375,7 +383,7 @@ export class GroupManager {
     const turnLines = this.turnSlice(groupId, this.chatLines(groupId));
     const speakCounts: Record<string, number> = {};
     for (const member of members) speakCounts[member.id] = state.speakCount.get(member.id) ?? 0;
-    return moderate(this.profiles, {
+    const decision = await moderate(this.profiles, {
       task: state.userTask,
       roster: members.map((member) => ({ id: member.id, name: member.name, role: member.role })),
       transcript: formatChatLines(lastMessages(turnLines, GROUP_HISTORY_WINDOW)),
@@ -383,6 +391,10 @@ export class GroupManager {
       files: fileNamesFromLines(turnLines),
       lastSpeakerId: state.lastSpeakerId,
     });
+    console.log(
+      `[groups] ${groupId} moderator source=${decision.source} next=[${decision.next.join(",")}] reason=${decision.reason}`,
+    );
+    return decision;
   }
 
   private handoffTargets(members: BotRow[], lines: ChatLine[]): BotRow[] {

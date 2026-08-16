@@ -4,6 +4,7 @@ export const GROUP_MIN_MEMBERS = 2;
 export const GROUP_MAX_MEMBERS = 6;
 /** 一轮用户发言后的成员发言硬顶（只数 text/handoff，不含工具卡）。 */
 export const GROUP_MAX_MEMBER_TURNS = 40;
+/** Soft preference only (prompt). Not a hard truncate — see takeGroupPosts. */
 export const GROUP_MAX_MESSAGES_PER_TURN = 2;
 export const GROUP_MAX_MODERATOR_CALLS = 12;
 export const GROUP_MAX_WALL_MS = 20 * 60 * 1000;
@@ -99,10 +100,25 @@ export function parseGroupPost(args: unknown): GroupPost {
 }
 
 export function takeGroupPosts(sends: GroupPost[], fallback?: string): GroupPost[] {
-  if (sends.length > 0) return sends.slice(0, GROUP_MAX_MESSAGES_PER_TURN);
+  // 不在这里截断。send_message 在 interceptTool 里即时落库，截断会让
+  // 房间里已出现的第 3 条上的 next/done 从编排器消失。落库条数、编排器
+  // 看到的 posts、信号提取范围必须一致。单回合软限制只写在提示词里。
+  if (sends.length > 0) return sends;
   const draft = (fallback ?? "").trim();
   if (!draft || isPassContent(draft)) return [];
   return [{ text: draft, next: [], done: false }];
+}
+
+export function mergeNextNames(into: string[], extra: string[]): string[] {
+  const seen = new Set(into.map((name) => name.toLowerCase()));
+  const out = [...into];
+  for (const raw of extra) {
+    const name = raw.trim();
+    if (!name || seen.has(name.toLowerCase())) continue;
+    seen.add(name.toLowerCase());
+    out.push(name);
+  }
+  return out;
 }
 
 export function lastPostSignal(posts: GroupPost[]): { next: string[]; done: boolean } {
@@ -110,28 +126,19 @@ export function lastPostSignal(posts: GroupPost[]): { next: string[]; done: bool
   let done = false;
   for (const post of posts) {
     if (post.done) done = true;
-    if (post.next.length) next = post.next;
+    if (post.next.length) next = mergeNextNames(next, post.next);
   }
   return { next, done };
 }
 
 export function resolveMembersByNames<T extends GroupMember>(members: T[], names: string[]): T[] {
   if (names.length === 0 || members.length === 0) return [];
+  const needles = new Set(names.map((name) => name.trim().toLowerCase()).filter(Boolean));
+  if (needles.size === 0) return [];
   const rosterNames = members.map((member) => member.name);
-  const out: T[] = [];
-  const seen = new Set<string>();
-  for (const raw of names) {
-    const needle = raw.trim().toLowerCase();
-    if (!needle) continue;
-    const hit = members.find((member) =>
-      mentionKeysFor(member.name, rosterNames).some((key) => key.toLowerCase() === needle),
-    );
-    if (hit && !seen.has(hit.id)) {
-      seen.add(hit.id);
-      out.push(hit);
-    }
-  }
-  return out;
+  return members.filter((member) =>
+    mentionKeysFor(member.name, rosterNames).some((key) => needles.has(key.toLowerCase())),
+  );
 }
 
 /** 防连选：主持人/Bot next 不应再点上一位，除非花名册只剩此人。 */
@@ -291,7 +298,7 @@ export function buildGroupMemberSystemPrompt(
     "When your part is ready for a teammate, set next to their exact name(s). When the user's task is finished and nobody else needs to act, set done=true.",
     "Address a teammate with @Name only as extra context; the orchestrator follows send_message next/done, not @ guesses.",
     'If you have nothing to do, send_message with "(pass)" or stay silent.',
-    "You may send at most 2 room messages this turn.",
+    "Prefer one or two room posts this turn. Put next or done on your last send_message — later posts still count.",
   ].join("\n");
 }
 

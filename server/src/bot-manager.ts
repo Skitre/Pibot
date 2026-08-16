@@ -551,8 +551,19 @@ export class BotManager {
     return this.restarting;
   }
 
+  private startEligibleBotSessions() {
+    for (const bot of this.listBots()) {
+      if (bot.status !== "stopped") this.startBotSession(bot.id);
+    }
+  }
+
   private attachBridgeIfNeeded(bridgePort: number) {
-    if (this.bridge) return;
+    if (this.bridge) {
+      // 电脑重启后 this.bridge 仍在，旧 WS 会重连。重连成功前命令会进队列。
+      // 这里补拉会话，避免只 dropAllLive 却不再 start_bot。
+      this.startEligibleBotSessions();
+      return;
+    }
     const bridge = new RpcBridge(bridgePort);
     this.bridge = bridge;
     bridge.on("open", () => {
@@ -560,10 +571,7 @@ export class BotManager {
       this.broadcastComputer();
       // 先同步账户级 MCP 配置，再启动 Bot；WS 消息顺序保证新进程读取到最新配置。
       this.pushMcpConfig();
-      // 电脑一连上，把所有不是用户主动停掉的 Bot 会话拉起来
-      for (const bot of this.listBots()) {
-        if (bot.status !== "stopped") this.startBotSession(bot.id);
-      }
+      this.startEligibleBotSessions();
     });
     bridge.on("event", (evt: any) => this.routeEvent(evt));
     bridge.connect();
@@ -920,15 +928,19 @@ export class BotManager {
 
   private handleBridgeEvent(evt: any) {
     switch (evt.event) {
-      case "connected":
+      case "connected": {
         this.computer.status = "online";
         this.broadcastComputer();
-        // 桥接重连：核对哪些会话还活着
-        for (const id of evt.running ?? []) {
+        const running = new Set<string>(evt.running ?? []);
+        for (const id of running) {
           if (!this.live.has(id)) this.live.set(id, newLive());
           this.setStatus(id, "online");
         }
+        for (const bot of this.listBots()) {
+          if (bot.status !== "stopped" && !running.has(bot.id)) this.startBotSession(bot.id);
+        }
         return;
+      }
       case "bot_started":
         if (!this.live.has(evt.botId)) {
           this.live.set(evt.botId, newLive());
@@ -1112,15 +1124,16 @@ export class BotManager {
           const writePath = toolWritePath(String(evt.toolName ?? ""), evt.args);
           if (writePath && evt.toolCallId) state.pendingWrites.set(String(evt.toolCallId), writePath);
         }
-        this.broadcast({
-          type: "tool",
-          botId,
-          channel: state.channel,
-          status: "start",
-          toolCallId: evt.toolCallId,
-          toolName: evt.toolName,
-          args: evt.args,
-        });
+        if (!this.inGroupSession(botId)) {
+          this.broadcast({
+            type: "tool",
+            botId,
+            status: "start",
+            toolCallId: evt.toolCallId,
+            toolName: evt.toolName,
+            args: evt.args,
+          });
+        }
         return;
 
       case "tool_execution_end": {
@@ -1138,15 +1151,16 @@ export class BotManager {
           if (this.inGroupSession(botId)) this.emitGroupPersist(botId, "tool", preview, meta);
           else this.saveMessage(botId, "assistant", preview, "tool", "", meta);
         }
-        this.broadcast({
-          type: "tool",
-          botId,
-          channel: state.channel,
-          status: "end",
-          toolCallId: evt.toolCallId,
-          toolName: evt.toolName,
-          isError: !!evt.isError,
-        });
+        if (!this.inGroupSession(botId)) {
+          this.broadcast({
+            type: "tool",
+            botId,
+            status: "end",
+            toolCallId: evt.toolCallId,
+            toolName: evt.toolName,
+            isError: !!evt.isError,
+          });
+        }
         return;
       }
 
