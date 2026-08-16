@@ -1,0 +1,11 @@
+#!/usr/bin/with-contenv bash
+# 共享电脑容器启动时的初始化：持久目录结构。
+# Bot 的身份/设置/记忆由 bridge.mjs 在 start_bot 时按 /config/bots/<botId>/ 动态生成。
+set -e
+
+mkdir -p /config/bots /config/workspace/uploads /config/.config /config/.npm
+# 旧版本使用 XFCE autostart；现在改由 s6 守护，删掉旧入口防止重复进程。
+rm -f /config/.config/autostart/chromium-cdp.desktop
+
+chown -R abc:abc /config/bots /config/workspace /config/.config /config/.npm
+echo "[pibot-setup] shared computer ready"

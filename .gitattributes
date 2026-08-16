@@ -1,0 +1,4 @@
+# 容器内执行的脚本必须保持 LF，否则在 Linux 下会报 $'\r': command not found
+bot-image/root/** text eol=lf
+bot-image/opt/** text eol=lf
+*.sh text eol=lf

@@ -1,0 +1,650 @@
+:root {
+  --bg-sidebar: #1b1b1d;
+  --bg-main: #0f0f10;
+  --bg-panel: #0f0f10;
+  --bg-bubble-bot: #232326;
+  --bg-bubble-user: #3a3a3e;
+  --bg-input: #202023;
+  --bg-hover: #29292c;
+  --bg-active: #2f2f33;
+  --text-primary: #e8e8ea;
+  --text-secondary: #8e8e93;
+  --text-placeholder: #6e6e73;
+  --accent-blue: #3b82f6;
+  --green-dot: #30d158;
+  --code-pink: #e989a6;
+  --code-bg: #34252c;
+  --border-subtle: #2e2e31;
+
+  --font: "Inter", -apple-system, "Segoe UI", system-ui, sans-serif;
+
+  font-family: var(--font);
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: var(--text-primary);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: #000;
+  overflow: hidden;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+}
+
+input,
+textarea {
+  font-family: inherit;
+  color: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #3a3a3e;
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@keyframes blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  50.01%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.pibot-mark {
+  --gaze-x: 0;
+  --gaze-y: 0;
+  --turn: 0;
+  --tilt: 0;
+  --roll: 0;
+  --mark-scale: 1;
+  --face-dx: 0;
+  --face-dy: 0;
+  --bounce-h: 10px;
+  --spin-ms: 720ms;
+  display: block;
+  flex-shrink: 0;
+  overflow: visible;
+}
+.pibot-mark__stage,
+.pibot-mark__pose,
+.pibot-mark__float,
+.pibot-mark__fit,
+.pibot-mark__body,
+.pibot-mark__gaze,
+.pibot-mark__look,
+.pibot-mark__face,
+.pibot-mark__eyes,
+.pibot-mark__halo,
+.pibot-mark__orbit,
+.pibot-mark__bits,
+.pibot-mark__bit {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.pibot-mark__pose {
+  transform-origin: 50px 56px;
+  transform: translate(calc(var(--turn) * 2.4px), calc(var(--tilt) * 1.8px))
+    rotate(calc(var(--roll) * 8deg))
+    scale(var(--mark-scale));
+}
+.pibot-mark__gaze {
+  transform: translate(calc(var(--gaze-x) * 5.2px), calc(var(--gaze-y) * 4px));
+}
+.pibot-mark__face {
+  transform: translate(calc(var(--face-dx) * 1px), calc(var(--face-dy) * 1px));
+}
+.pibot-mark__fit {
+  transform: scale(1.16);
+}
+.pibot-mark__halo {
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.pibot-mark__orbit,
+.pibot-mark__bits {
+  opacity: 0;
+}
+.pibot-mark__orbit {
+  stroke-opacity: 0.28;
+}
+.pibot-mark--emphasis .pibot-mark__pose {
+  filter: saturate(1.12);
+}
+
+.pibot-mark--breathe .pibot-mark__float {
+  animation: pibot-clip-breathe 1.5s ease-in-out infinite;
+}
+.pibot-mark--breatheFast .pibot-mark__float {
+  animation: pibot-clip-breathe 0.92s ease-in-out infinite;
+}
+.pibot-mark--breatheSlow .pibot-mark__float {
+  animation: pibot-clip-breathe 2.8s ease-in-out infinite;
+}
+.pibot-mark--sway .pibot-mark__float {
+  animation: pibot-clip-sway 1.5s ease-in-out infinite;
+}
+.pibot-mark--swaySlow .pibot-mark__float {
+  animation: pibot-clip-sway 2.6s ease-in-out infinite;
+}
+.pibot-mark--nod .pibot-mark__float {
+  animation: pibot-clip-nod 1.5s ease-in-out infinite;
+}
+.pibot-mark--shiver .pibot-mark__float {
+  animation: pibot-clip-shiver 0.42s linear infinite;
+}
+.pibot-mark--blink .pibot-mark__eyes {
+  animation: pibot-clip-blink 5.2s ease-in-out infinite;
+}
+.pibot-mark--glance .pibot-mark__look {
+  animation: pibot-clip-glance 2.8s ease-in-out infinite;
+}
+.pibot-mark--glanceFast .pibot-mark__look {
+  animation: pibot-clip-glance 1.5s ease-in-out infinite;
+}
+.pibot-mark--droop .pibot-mark__look {
+  transform: translate(0, 3.2px);
+}
+.pibot-mark--orbitSlow .pibot-mark__orbit {
+  opacity: 0.7;
+  animation: pibot-clip-spin 8s linear infinite;
+}
+.pibot-mark--orbitFast .pibot-mark__orbit {
+  opacity: 1;
+  animation: pibot-clip-spin 3.6s linear infinite;
+}
+.pibot-mark--orbitFast .pibot-mark__orbit-inner {
+  animation: pibot-clip-spin 2.2s linear infinite reverse;
+}
+.pibot-mark--pulse .pibot-mark__halo {
+  animation: pibot-clip-pulse 1.5s ease-in-out infinite;
+}
+.pibot-mark--bitsSoft .pibot-mark__bits {
+  opacity: 0.55;
+}
+.pibot-mark--bitsSoft .pibot-mark__bit--a {
+  animation: pibot-clip-bit 2.4s ease-in-out infinite;
+}
+.pibot-mark--bitsOn .pibot-mark__bits {
+  opacity: 1;
+}
+.pibot-mark--bitsOn .pibot-mark__bit--a {
+  animation: pibot-clip-bit 1.5s ease-in-out infinite;
+}
+.pibot-mark--bitsOn .pibot-mark__bit--b {
+  animation: pibot-clip-bit 1.5s ease-in-out 0.2s infinite;
+}
+.pibot-mark--bitsOn .pibot-mark__bit--c {
+  animation: pibot-clip-bit 1.5s ease-in-out 0.45s infinite;
+}
+
+.pibot-mark--oneshot-spin .pibot-mark__stage {
+  animation: pibot-oneshot-spin var(--spin-ms, 720ms) cubic-bezier(0.22, 0.8, 0.3, 1) both;
+}
+.pibot-mark--oneshot-bounce .pibot-mark__stage {
+  animation: pibot-oneshot-bounce 0.382s cubic-bezier(0.22, 1.2, 0.36, 1) both;
+}
+.pibot-mark--oneshot-bounce[data-bounce="0"] .pibot-mark__stage {
+  animation-duration: 0.177s;
+}
+.pibot-mark--oneshot-bounce[data-bounce="1"] .pibot-mark__stage {
+  animation-duration: 0.27s;
+}
+.pibot-mark--oneshot-bounce[data-bounce="2"] .pibot-mark__stage {
+  animation-duration: 0.382s;
+}
+.pibot-mark--oneshot-bounce[data-bounce="3"] .pibot-mark__stage {
+  animation-duration: 0.5s;
+}
+.pibot-mark--oneshot-burst .pibot-mark__stage {
+  animation: pibot-oneshot-pop 0.62s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}
+.pibot-mark--oneshot-burst .pibot-mark__bits {
+  opacity: 1;
+}
+.pibot-mark--oneshot-burst .pibot-mark__bit--a {
+  animation: pibot-oneshot-burst-a 0.62s ease-out both;
+}
+.pibot-mark--oneshot-burst .pibot-mark__bit--b {
+  animation: pibot-oneshot-burst-b 0.62s ease-out both;
+}
+.pibot-mark--oneshot-burst .pibot-mark__bit--c {
+  animation: pibot-oneshot-burst-c 0.62s ease-out both;
+}
+
+.pibot-mark--paused .pibot-mark__float,
+.pibot-mark--paused .pibot-mark__eyes,
+.pibot-mark--paused .pibot-mark__look,
+.pibot-mark--paused .pibot-mark__orbit,
+.pibot-mark--paused .pibot-mark__orbit-inner,
+.pibot-mark--paused .pibot-mark__halo,
+.pibot-mark--paused .pibot-mark__bit,
+.pibot-mark--paused .pibot-mark__stage {
+  animation: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pibot-mark__float,
+  .pibot-mark__eyes,
+  .pibot-mark__look,
+  .pibot-mark__orbit,
+  .pibot-mark__orbit-inner,
+  .pibot-mark__halo,
+  .pibot-mark__bit,
+  .pibot-mark__stage {
+    animation: none !important;
+  }
+  .pibot-mark__orbit,
+  .pibot-mark__bits,
+  .pibot-mark__halo {
+    opacity: 0;
+  }
+}
+
+@keyframes pibot-clip-breathe {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-1.1px);
+  }
+}
+@keyframes pibot-clip-sway {
+  0%,
+  100% {
+    transform: translate(0, 0) rotate(-2.2deg);
+  }
+  50% {
+    transform: translate(1px, 1.4px) rotate(2.6deg);
+  }
+}
+@keyframes pibot-clip-nod {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  40% {
+    transform: translateY(2.2px) rotate(-1deg);
+  }
+  70% {
+    transform: translateY(-0.6px) rotate(0.6deg);
+  }
+}
+@keyframes pibot-clip-shiver {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  25% {
+    transform: translate(-0.8px, 0.4px);
+  }
+  75% {
+    transform: translate(0.8px, -0.3px);
+  }
+}
+@keyframes pibot-clip-blink {
+  0%,
+  86%,
+  100% {
+    transform: scaleY(1);
+  }
+  89%,
+  91% {
+    transform: scaleY(0.12);
+  }
+}
+@keyframes pibot-clip-glance {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  28% {
+    transform: translate(2.2px, -1.1px);
+  }
+  64% {
+    transform: translate(-1.6px, 0.8px);
+  }
+}
+@keyframes pibot-clip-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes pibot-clip-pulse {
+  0%,
+  100% {
+    opacity: 0.08;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 0.2;
+    transform: scale(1.04);
+  }
+}
+@keyframes pibot-clip-bit {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(0.85);
+    opacity: 0.35;
+  }
+  50% {
+    transform: translate(-3px, -5px) scale(1.15);
+    opacity: 1;
+  }
+}
+@keyframes pibot-oneshot-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes pibot-oneshot-bounce {
+  0% {
+    transform: translateY(0);
+  }
+  28% {
+    transform: translateY(calc(var(--bounce-h) * -1));
+  }
+  52% {
+    transform: translateY(calc(var(--bounce-h) * -0.38));
+  }
+  72% {
+    transform: translateY(calc(var(--bounce-h) * -0.14));
+  }
+  86% {
+    transform: translateY(calc(var(--bounce-h) * -0.04));
+  }
+  100% {
+    transform: translateY(0);
+  }
+}
+@keyframes pibot-oneshot-pop {
+  0% {
+    transform: scale(0.86);
+  }
+  42% {
+    transform: scale(1.08);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes pibot-oneshot-burst-a {
+  0% {
+    transform: translate(0, 0) scale(0.3);
+    opacity: 0;
+  }
+  30% {
+    opacity: 1;
+    transform: translate(7px, -11px) scale(1.2);
+  }
+  100% {
+    transform: translate(16px, -3px) scale(0.2);
+    opacity: 0;
+  }
+}
+@keyframes pibot-oneshot-burst-b {
+  0% {
+    transform: translate(0, 0) scale(0.3);
+    opacity: 0;
+  }
+  30% {
+    opacity: 1;
+    transform: translate(-9px, -8px) scale(1.15);
+  }
+  100% {
+    transform: translate(-15px, 2px) scale(0.2);
+    opacity: 0;
+  }
+}
+@keyframes pibot-oneshot-burst-c {
+  0% {
+    transform: translate(0, 0) scale(0.3);
+    opacity: 0;
+  }
+  30% {
+    opacity: 1;
+    transform: translate(5px, 8px) scale(1.1);
+  }
+  100% {
+    transform: translate(12px, 14px) scale(0.2);
+    opacity: 0;
+  }
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    transform: scale(0.8);
+    opacity: 0.6;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 1;
+  }
+}
+
+/* 侧栏列表项：操作按钮仅在悬停（或菜单打开）时出现，并让位给时间戳 */
+.side-row .row-more {
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  pointer-events: none;
+}
+.side-row:hover .row-more,
+.side-row .row-more.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+.side-row:hover .row-time {
+  visibility: hidden;
+}
+.side-item:hover {
+  background: var(--bg-hover);
+}
+
+/* 消息气泡：悬停时才显示操作按钮（复制等） */
+.msg-row .msg-act {
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.msg-row:hover .msg-act {
+  opacity: 1;
+}
+.msg-act:hover {
+  background: var(--bg-active);
+}
+
+.work-head:hover {
+  background: var(--bg-hover);
+}
+.work-step:hover:not(:disabled) {
+  opacity: 0.85;
+}
+.file-card:hover {
+  opacity: 0.88;
+}
+
+.pibot-md {
+  line-height: 1.5;
+  word-break: break-word;
+}
+.pibot-md > :first-child {
+  margin-top: 0;
+}
+.pibot-md > :last-child {
+  margin-bottom: 0;
+}
+.pibot-md p {
+  margin: 0 0 8px;
+}
+.pibot-md h1,
+.pibot-md h2,
+.pibot-md h3,
+.pibot-md h4,
+.pibot-md h5,
+.pibot-md h6 {
+  margin: 14px 0 6px;
+  line-height: 1.3;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+.pibot-md h1 {
+  font-size: 1.28em;
+}
+.pibot-md h2 {
+  font-size: 1.16em;
+}
+.pibot-md h3 {
+  font-size: 1.06em;
+}
+.pibot-md h4,
+.pibot-md h5,
+.pibot-md h6 {
+  font-size: 1em;
+}
+.pibot-md ul,
+.pibot-md ol {
+  margin: 2px 0 8px;
+  padding-left: 1.4em;
+}
+.pibot-md li {
+  margin: 2px 0;
+}
+.pibot-md li > p {
+  margin: 0;
+}
+.pibot-md ul.contains-task-list {
+  padding-left: 1.15em;
+}
+.pibot-md li.task-list-item {
+  list-style: none;
+}
+.pibot-md li.task-list-item input {
+  margin: 0 0.45em 0 -1.15em;
+  vertical-align: middle;
+}
+.pibot-md blockquote {
+  margin: 6px 0 8px;
+  padding: 2px 0 2px 10px;
+  border-left: 3px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+.pibot-md hr {
+  border: none;
+  border-top: 1px solid var(--border-subtle);
+  margin: 12px 0;
+}
+.pibot-md a {
+  color: var(--accent-blue);
+  text-decoration: none;
+}
+.pibot-md a:hover {
+  text-decoration: underline;
+}
+.pibot-md strong {
+  font-weight: 700;
+}
+.pibot-md em {
+  font-style: italic;
+}
+.pibot-md del {
+  color: var(--text-secondary);
+}
+.pibot-md code {
+  background: var(--code-bg);
+  color: var(--code-pink);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.9em;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+.pibot-md pre {
+  background: #0b0b0c;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  font-size: 12.5px;
+  margin: 6px 0 10px;
+}
+.pibot-md pre code {
+  background: none;
+  color: var(--text-primary);
+  padding: 0;
+  border-radius: 0;
+  font-size: inherit;
+}
+.pibot-md img {
+  max-width: 100%;
+  border-radius: 8px;
+  display: block;
+  margin: 6px 0;
+}
+.pibot-md .pibot-md__table-wrap {
+  overflow-x: auto;
+  margin: 6px 0 10px;
+}
+.pibot-md table {
+  border-collapse: collapse;
+  width: max-content;
+  min-width: 100%;
+  font-size: 0.95em;
+}
+.pibot-md th,
+.pibot-md td {
+  border: 1px solid var(--border-subtle);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.pibot-md th {
+  background: var(--bg-active);
+  font-weight: 600;
+}
+.pibot-md tr:nth-child(even) td {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

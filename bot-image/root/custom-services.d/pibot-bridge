@@ -1,0 +1,7 @@
+#!/usr/bin/with-contenv bash
+# pi RPC WebSocket 桥（以桌面用户 abc 运行，pi 子进程 HOME=/config）
+# with-contenv 必需：s6 服务默认拿不到 Docker 注入的 PIBOT_* 环境变量，
+# 缺了它 pi 会报 "No API key found for the selected model"。
+export HOME=/config
+mkdir -p /config/workspace
+exec s6-setuidgid abc node /opt/pibot/bridge.mjs
