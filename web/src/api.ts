@@ -8,6 +8,7 @@ import type {
   Computer,
   Group,
   GroupMessage,
+  GroupModeratorInput,
   Message,
   McpServer,
   McpServerInput,
@@ -141,7 +142,12 @@ export const api = {
   groupMessages: (gid: string) =>
     fetch(`/api/groups/${gid}/messages`).then(j<{ messages: GroupMessage[]; members: Bot[] }>),
   deleteGroup: (gid: string) => fetch(`/api/groups/${gid}`, { method: "DELETE" }),
-
+  updateGroupModerator: (gid: string, input: GroupModeratorInput) =>
+    fetch(`/api/groups/${gid}/moderator`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    }).then(j<{ group: Group }>),
   listProfiles: () => fetch("/api/models").then(j<{ profiles: ModelProfile[] }>),
   createProfile: (input: ProfileInput) =>
     fetch("/api/models", {

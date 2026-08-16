@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { Attachment, Bot, Group, GroupMessage, Message } from "../types";
+import { THINKING_LEVELS, type Attachment, type Bot, type Group, type GroupMessage, type Message } from "../types";
 import { store, useStore } from "../store";
 import { api } from "../api";
 import { Composer } from "./Composer";
@@ -7,7 +7,7 @@ import { BotAvatar } from "./BotAvatar";
 import { FileCard, WorkLog } from "./Messages";
 import { Markdown } from "./Markdown";
 import { formatDayDivider } from "../util";
-import { ScreenIcon } from "./icons";
+import { ScreenIcon, GearIcon } from "./icons";
 import { useT } from "../i18n";
 
 interface Props {
@@ -26,22 +26,25 @@ export function GroupChatView({ group, panelOpen, onTogglePanel }: Props) {
   const members = useStore((s) => s.groupMembers[group.id]) ?? EMPTY_MEMBERS;
   const working = useStore((s) => s.working);
   const workingChannel = useStore((s) => s.workingChannel);
-  const stream = useStore((s) => s.stream);
+  const assigning = useStore((s) => !!s.groupAssigning[group.id]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [listening, setListening] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [moderatorOpen, setModeratorOpen] = useState(false);
   const tr = useT();
+  const hostName = group.moderator_name?.trim() || tr("group.hostFallback");
   const groupChannel = `group:${group.id}`;
   const busy = members.filter((m) => working[m.id] && workingChannel[m.id] === groupChannel);
 
   useEffect(() => {
     store.loadGroup(group.id);
+    setModeratorOpen(false);
   }, [group.id]);
 
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, stream, busy.length]);
+  }, [messages, busy.length, assigning]);
 
   const mentionNames = useMemo(
     () => [...members.map((m) => m.name), "everyone"],
@@ -74,13 +77,26 @@ export function GroupChatView({ group, panelOpen, onTogglePanel }: Props) {
           <span style={{ fontSize: 15, fontWeight: 600 }}>{group.name}</span>
           <span style={memberCount}>{tr("group.bots", { n: members.length })}</span>
         </div>
-        <button
-          style={{ ...hIconBtn, color: panelOpen ? "var(--text-primary)" : "var(--text-secondary)" }}
-          onClick={onTogglePanel}
-          title={tr("computer.shared")}
-        >
-          <ScreenIcon />
-        </button>
+        <div style={{ display: "flex", gap: 4, alignItems: "center", position: "relative" }}>
+          <button
+            style={{ ...hIconBtn, color: panelOpen ? "var(--text-primary)" : "var(--text-secondary)" }}
+            onClick={onTogglePanel}
+            title={tr("computer.shared")}
+          >
+            <ScreenIcon />
+          </button>
+          <button
+            data-moderator-toggle=""
+            style={{ ...hIconBtn, color: moderatorOpen ? "var(--text-primary)" : "var(--text-secondary)" }}
+            onClick={() => setModeratorOpen((v) => !v)}
+            title={tr("group.moderatorSettings")}
+          >
+            <GearIcon />
+          </button>
+          {moderatorOpen && (
+            <ModeratorPanel key={group.id} group={group} onClose={() => setModeratorOpen(false)} />
+          )}
+        </div>
       </div>
 
       <div style={scroll} ref={scrollRef}>
@@ -93,31 +109,22 @@ export function GroupChatView({ group, panelOpen, onTogglePanel }: Props) {
               {tr("group.hint", { name: members[0]?.name ?? "Name" })}
             </div>
           )}
-          <GroupThread messages={messages} colorOf={colorOf} live={busy.length > 0} />
-          {busy.map((b) => {
-            const live = stream[b.id] ?? "";
-            if (live) {
-              return (
-                <div key={b.id} style={{ display: "flex", gap: 9, margin: "6px 0", alignItems: "flex-start" }}>
-                  <BotAvatar id={b.id} color={b.avatar_color} size={26} working />
-                  <div style={{ minWidth: 0 }}>
-                    <div style={authorLine}>{b.name}</div>
-                    <div style={bubbleBot}>
-                      <Markdown text={live + "▍"} />
-                    </div>
-                  </div>
-                </div>
-              );
-            }
-            return (
-              <div key={b.id} style={{ display: "flex", alignItems: "center", gap: 9, margin: "6px 2px" }}>
-                <BotAvatar id={b.id} color={b.avatar_color} size={20} working />
-                <span style={{ fontSize: 12.5, color: "var(--text-secondary)" }}>
-                  {tr("group.working", { name: b.name })}
-                </span>
-              </div>
-            );
-          })}
+          <GroupThread messages={messages} colorOf={colorOf} live={busy.length > 0 || assigning} />
+          {assigning && (
+            <div style={{ display: "flex", alignItems: "center", gap: 9, margin: "6px 2px" }}>
+              <span style={{ fontSize: 12.5, color: "var(--text-secondary)" }}>
+                {tr("group.assigning", { name: hostName })}
+              </span>
+            </div>
+          )}
+          {busy.map((b) => (
+            <div key={b.id} style={{ display: "flex", alignItems: "center", gap: 9, margin: "6px 2px" }}>
+              <BotAvatar id={b.id} color={b.avatar_color} size={20} working />
+              <span style={{ fontSize: 12.5, color: "var(--text-secondary)" }}>
+                {tr("group.working", { name: b.name })}
+              </span>
+            </div>
+          ))}
         </div>
       </div>
 
@@ -125,7 +132,7 @@ export function GroupChatView({ group, panelOpen, onTogglePanel }: Props) {
         botName={group.name}
         allowAttachments
         mentionNames={mentionNames}
-        working={busy.length > 0}
+        working={busy.length > 0 || assigning}
         busy={uploading}
         onFocusChange={setListening}
         onStop={() => store.abortGroup(group.id)}
@@ -153,6 +160,138 @@ export function GroupChatView({ group, panelOpen, onTogglePanel }: Props) {
             setUploading(false);
           }
         }}
+      />
+    </div>
+  );
+}
+
+function ModeratorPanel({ group, onClose }: { group: Group; onClose: () => void }) {
+  const profiles = useStore((s) => s.profiles);
+  const tr = useT();
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [name, setName] = useState(group.moderator_name ?? tr("group.hostFallback"));
+  const [profileId, setProfileId] = useState(group.moderator_profile_id ?? "");
+  const [instructions, setInstructions] = useState(group.moderator_instructions ?? "");
+  const [maxTokens, setMaxTokens] = useState(String(group.moderator_max_tokens || ""));
+  const [history, setHistory] = useState(String(group.moderator_history || ""));
+  const [thinking, setThinking] = useState(group.moderator_thinking ?? "");
+  const draft = useRef({ name, profileId, instructions, maxTokens, history, thinking });
+  draft.current = { name, profileId, instructions, maxTokens, history, thinking };
+
+  const save = (d: typeof draft.current) =>
+    store.updateGroupModerator(group.id, {
+      name: d.name,
+      profileId: d.profileId || null,
+      instructions: d.instructions,
+      maxTokens: Number(d.maxTokens) || 0,
+      history: Number(d.history) || 0,
+      thinking: d.thinking,
+    });
+
+  const persist = async (next?: Partial<typeof draft.current>) => {
+    await save({ ...draft.current, ...next });
+  };
+
+  useEffect(() => {
+    return () => {
+      void save(draft.current);
+    };
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- flush the draft only when switching group
+  }, [group.id]);
+
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Node | null;
+      if (wrapRef.current?.contains(target)) return;
+      if (target instanceof Element && target.closest("[data-moderator-toggle]")) return;
+      onClose();
+    };
+    const timer = setTimeout(() => document.addEventListener("mousedown", onDown), 0);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener("mousedown", onDown);
+    };
+  }, [onClose]);
+
+  return (
+    <div ref={wrapRef} style={moderatorMenu}>
+      <div style={moderatorTitle}>{tr("group.moderatorTitle")}</div>
+      <p style={moderatorHint}>{tr("group.moderatorHint")}</p>
+      <label style={moderatorLabel}>{tr("group.moderatorName")}</label>
+      <input
+        style={moderatorInput}
+        value={name}
+        placeholder={tr("group.moderatorNamePh")}
+        onChange={(e) => setName(e.target.value)}
+        onBlur={() => void persist()}
+      />
+      <label style={moderatorLabel}>{tr("group.moderatorModel")}</label>
+      <select
+        style={moderatorInput}
+        value={profileId}
+        onChange={(e) => {
+          const next = e.target.value;
+          setProfileId(next);
+          void persist({ profileId: next });
+        }}
+      >
+        <option value="">{tr("group.moderatorDefault")}</option>
+        {profiles.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name} · {p.model_id}
+          </option>
+        ))}
+      </select>
+      <label style={moderatorLabel}>{tr("group.moderatorThinking")}</label>
+      <select
+        style={moderatorInput}
+        value={thinking}
+        onChange={(e) => {
+          const next = e.target.value;
+          setThinking(next);
+          void persist({ thinking: next });
+        }}
+      >
+        <option value="">{tr("group.moderatorInherit")}</option>
+        {THINKING_LEVELS.map((level) => (
+          <option key={level} value={level}>
+            {level}
+          </option>
+        ))}
+      </select>
+      <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ flex: 1 }}>
+          <label style={moderatorLabel}>{tr("group.moderatorMaxTokens")}</label>
+          <input
+            style={moderatorInput}
+            type="number"
+            min={0}
+            value={maxTokens}
+            placeholder={tr("group.moderatorInherit")}
+            onChange={(e) => setMaxTokens(e.target.value)}
+            onBlur={() => void persist()}
+          />
+        </div>
+        <div style={{ flex: 1 }}>
+          <label style={moderatorLabel}>{tr("group.moderatorHistory")}</label>
+          <input
+            style={moderatorInput}
+            type="number"
+            min={0}
+            value={history}
+            placeholder={tr("group.moderatorInherit")}
+            onChange={(e) => setHistory(e.target.value)}
+            onBlur={() => void persist()}
+          />
+        </div>
+      </div>
+      <label style={moderatorLabel}>{tr("group.moderatorNotes")}</label>
+      <textarea
+        style={{ ...moderatorInput, minHeight: 72, resize: "vertical" }}
+        value={instructions}
+        placeholder={tr("group.moderatorNotesPh")}
+        onChange={(e) => setInstructions(e.target.value)}
+        onBlur={() => void persist()}
       />
     </div>
   );
@@ -340,4 +479,48 @@ const bubbleHandoff: React.CSSProperties = {
   opacity: 0.88,
   fontSize: 13,
   borderStyle: "dashed",
+};
+const moderatorMenu: React.CSSProperties = {
+  position: "absolute",
+  top: 38,
+  right: 0,
+  zIndex: 30,
+  width: 300,
+  background: "#232326",
+  borderWidth: 1,
+  borderStyle: "solid",
+  borderColor: "var(--border-subtle)",
+  borderRadius: 10,
+  padding: "10px 12px 12px",
+  boxShadow: "0 12px 32px rgba(0,0,0,0.55)",
+  animation: "fade-up 0.12s ease",
+};
+const moderatorTitle: React.CSSProperties = {
+  fontSize: 13,
+  fontWeight: 600,
+  marginBottom: 4,
+};
+const moderatorHint: React.CSSProperties = {
+  fontSize: 11.5,
+  color: "var(--text-secondary)",
+  lineHeight: 1.45,
+  margin: "0 0 10px",
+};
+const moderatorLabel: React.CSSProperties = {
+  display: "block",
+  fontSize: 11,
+  color: "var(--text-secondary)",
+  margin: "8px 0 4px",
+};
+const moderatorInput: React.CSSProperties = {
+  width: "100%",
+  background: "var(--bg-input)",
+  borderWidth: 1,
+  borderStyle: "solid",
+  borderColor: "var(--border-subtle)",
+  borderRadius: 8,
+  padding: "7px 10px",
+  fontSize: 13,
+  outline: "none",
+  color: "var(--text-primary)",
 };

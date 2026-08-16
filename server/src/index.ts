@@ -6,7 +6,7 @@ import type { WebSocket } from "ws";
 import { loadConfig } from "./config.js";
 import { BotLookError, BotManager, BotSettingsError, parseBotLook } from "./bot-manager.js";
 import { RoutineScheduler } from "./routines.js";
-import { GroupManager, GroupError } from "./groups.js";
+import { GroupManager, GroupError, type GroupModeratorInput } from "./groups.js";
 import { ModelProfileStore, type ProfileInput } from "./model-profiles.js";
 import { SkillStore, type SkillInput } from "./skills.js";
 import { McpServerStore, type McpServerInput } from "./mcp-servers.js";
@@ -263,8 +263,20 @@ app.delete("/api/groups/:gid", async (req) => {
   groups.deleteGroup((req.params as { gid: string }).gid);
   return { ok: true };
 });
+app.put("/api/groups/:gid/moderator", async (req, reply) => {
+  const { gid } = req.params as { gid: string };
+  const body = (req.body ?? {}) as GroupModeratorInput;
+  if (body.profileId && !profiles.get(body.profileId)) {
+    return reply.code(404).send({ error: "profile not found" });
+  }
+  try {
+    return { group: groups.updateModerator(gid, body) };
+  } catch (err) {
+    if (err instanceof GroupError) return reply.code(err.statusCode).send({ error: err.message });
+    throw err;
+  }
+});
 
-// ---------- REST：模型配置档案 ----------
 app.get("/api/models", async () => ({ profiles: profiles.list() }));
 
 app.post("/api/models", async (req) => {
@@ -470,6 +482,7 @@ app.get("/ws", { websocket: true }, (socket) => {
   ws.send(JSON.stringify({ type: "bots", bots: bots.listBots() }));
   ws.send(JSON.stringify({ type: "working_state", bots: bots.workingSnapshot() }));
   ws.send(JSON.stringify({ type: "group_run_state", groups: groups.runningGroups() }));
+  ws.send(JSON.stringify({ type: "group_moderator_state", groupIds: groups.assigningGroups() }));
   ws.send(JSON.stringify({ type: "computer", computer: bots.getComputer() }));
 
   ws.on("message", (raw: Buffer) => {

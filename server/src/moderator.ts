@@ -8,6 +8,7 @@ export interface ModeratorInput {
   speakCounts: Record<string, number>;
   files: string[];
   lastSpeakerId?: string | null;
+  extraInstructions?: string;
 }
 
 export interface ModeratorDecision {
@@ -23,15 +24,24 @@ const SYSTEM = [
   "Reply with JSON only, no markdown:",
   '{"next":["ExactName"],"done":false,"reason":"one short sentence"}',
   "Rules:",
-  "- next names must be exact roster names. Multiple names run in that order.",
+  "- next names must be copied exactly from the quoted roster names, without the role. Multiple names run in that order.",
   "- Invite as many people as the latest user message calls for: one, several, or the whole roster.",
   "- Prefer inviting one extra person over leaving the user unanswered. Members can pass; a missed invite leaves the user hanging.",
   "- Do not pick the last speaker if someone else can continue.",
   "- done=true only when nothing useful remains to say or do.",
   "- If done=true, next must be [].",
+  "- Write reason in the same language as the latest user message; it is shown in the room.",
 ].join("\n");
 
-function fallback(input: ModeratorInput): ModeratorDecision {
+function systemPrompt(extra?: string): string {
+  const note = extra?.trim();
+  if (!note) return SYSTEM;
+  return `${SYSTEM}\n- Extra instructions for this room:\n${note}`;
+}
+
+/** why 只进日志：三条降级路径的对外表现完全一样，不记原因就分不清是接口错、解析失败还是点名无效。 */
+function fallback(input: ModeratorInput, why: string): ModeratorDecision {
+  console.warn(`[moderator] fallback: ${why}`);
   const unspoken = input.roster.filter((member) => (input.speakCounts[member.id] ?? 0) === 0);
   const guarded = guardNextMembers(unspoken, input.lastSpeakerId ?? null);
   if (guarded.length === 0) {
@@ -78,7 +88,9 @@ function validate(
   }
   const resolved = resolveMembersByNames(input.roster, parsed.next);
   const guarded = guardNextMembers(resolved, input.lastSpeakerId ?? null);
-  if (guarded.length === 0) return fallback(input);
+  if (guarded.length === 0) {
+    return fallback(input, `next=[${parsed.next.join(",")}] resolved to nobody usable`);
+  }
   return {
     next: guarded.map((member) => member.name),
     done: false,
@@ -90,9 +102,9 @@ function validate(
 function buildUserPrompt(input: ModeratorInput): string {
   const roster = input.roster
     .map((member) => {
-      const role = member.role ? ` — ${member.role}` : "";
+      const role = member.role ? `, role: ${member.role}` : "";
       const n = input.speakCounts[member.id] ?? 0;
-      return `- ${member.name}${role} (spoke ${n} time${n === 1 ? "" : "s"})`;
+      return `- "${member.name}" (spoke ${n} time${n === 1 ? "" : "s"}${role})`;
     })
     .join("\n");
   const last = input.roster.find((member) => member.id === input.lastSpeakerId);
@@ -109,27 +121,44 @@ function buildUserPrompt(input: ModeratorInput): string {
   ].join("\n");
 }
 
-export async function moderate(profiles: ModelProfileStore, input: ModeratorInput): Promise<ModeratorDecision> {
+export interface ModeratorOptions {
+  profileId?: string | null;
+  /** 0 或省略表示跟随所选档案的「最大输出 tokens」 */
+  maxTokens?: number;
+  /** 空表示不发送思考参数，保持端点默认 */
+  thinking?: string;
+}
+
+export async function moderate(
+  profiles: ModelProfileStore,
+  input: ModeratorInput,
+  opts?: ModeratorOptions,
+): Promise<ModeratorDecision> {
   if (input.roster.length === 0) {
     return { next: [], done: true, reason: "No one left to speak.", source: "fallback" };
   }
-  const profile = profiles.getDefault();
-  if (!profile) return fallback(input);
+  const profile = (opts?.profileId ? profiles.get(opts.profileId) : undefined) ?? profiles.getDefault();
+  if (!profile) return fallback(input, "no model profile configured");
   try {
     const result = await profiles.complete(
       profile,
       [
-        { role: "system", content: SYSTEM },
+        { role: "system", content: systemPrompt(input.extraInstructions) },
         { role: "user", content: buildUserPrompt(input) },
       ],
-      { maxTokens: 512, timeoutMs: 15_000 },
+      {
+        timeoutMs: 25_000,
+        ...(opts?.maxTokens ? { maxTokens: opts.maxTokens } : {}),
+        ...(opts?.thinking ? { thinking: opts.thinking } : {}),
+      },
     );
-    if (!result.ok) return fallback(input);
+    if (!result.ok) return fallback(input, `api error: ${result.detail.slice(0, 200)}`);
     const parsed = parseDecision(result.text);
-    if (!parsed) return fallback(input);
+    if (!parsed) {
+      return fallback(input, `unparseable reply (${result.detail}): ${result.text.slice(0, 200)}`);
+    }
     return validate(parsed, input);
   } catch (err) {
-    console.warn(`[moderator] failed: ${(err as Error).message}`);
-    return fallback(input);
+    return fallback(input, `threw: ${(err as Error).message}`);
   }
 }

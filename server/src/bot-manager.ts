@@ -582,7 +582,7 @@ export class BotManager {
     for (const [botId, state] of this.live) {
       for (const item of state.queue) item.resolve(false);
       state.queue = [];
-      this.abandonGroupMemberTurn(state);
+      this.abandonGroupMemberTurn(botId, state);
       this.rejectPendingRpc(botId);
       if (state.streaming) {
         this.broadcast({ type: "working", botId, working: false, channel: state.channel });
@@ -693,7 +693,7 @@ export class BotManager {
     this.groupTurns.delete(id);
     this.rejectPendingRpc(id);
     const state = this.live.get(id);
-    if (state) this.abandonGroupMemberTurn(state);
+    if (state) this.abandonGroupMemberTurn(id, state);
     this.bridge?.send({ type: "_pibot", cmd: "stop_bot", botId: id });
     this.live.delete(id);
     this.setStatus(id, "stopped");
@@ -703,7 +703,7 @@ export class BotManager {
     this.groupTurns.delete(id);
     this.rejectPendingRpc(id);
     const state = this.live.get(id);
-    if (state) this.abandonGroupMemberTurn(state);
+    if (state) this.abandonGroupMemberTurn(id, state);
     db.prepare("DELETE FROM bot_sessions WHERE bot_id = ?").run(id);
     this.bridge?.send({ type: "_pibot", cmd: "stop_bot", botId: id });
     this.live.delete(id);
@@ -1096,7 +1096,10 @@ export class BotManager {
         const a = evt.assistantMessageEvent;
         if (a?.type === "text_delta") {
           state.streamText += a.delta;
-          this.broadcast({ type: "stream", botId, delta: a.delta, channel: state.channel });
+          // 群里助理正文是私稿，只等 send_message 落库。广播出去会闪一帧「心里话」。
+          if (!this.inGroupSession(botId)) {
+            this.broadcast({ type: "stream", botId, delta: a.delta, channel: state.channel });
+          }
         }
         return;
       }
@@ -1254,6 +1257,8 @@ export class BotManager {
         console.warn(
           `[bots] ${botId} send_message dropped after ${GROUP_MAX_MESSAGES_PER_TURN} room posts this turn`,
         );
+        // 正文丢掉，但 next/done 要留下：超限那条上的交接信号若消失，编排器会以为没人接手。
+        if (live) live.groupSends.push({ ...post, text: "", persisted: false });
         return;
       }
       if (live) live.groupSends.push({ ...post, persisted: true });
@@ -1382,7 +1387,20 @@ export class BotManager {
     const state = this.live.get(botId);
     if (!state || !this.bridge?.connected) return [];
     if (state.streaming && state.channel !== channel) {
-      await this.waitUntilIdle(botId, 120_000);
+      // 另一个群的残留回合（常见于刚删群）不要干等到 120s，否则新群会空转到主持人预算耗尽。
+      // 私聊 main 仍等待，不误杀。
+      if (state.channel.startsWith("group:") && channel.startsWith("group:")) {
+        console.warn(`[bots] ${botId} abort leftover ${state.channel} before ${channel}`);
+        this.abort(botId, state.channel);
+        await this.waitUntilIdle(botId, 15_000);
+        const stale = this.live.get(botId);
+        if (stale?.streaming && stale.channel !== channel && stale.channel.startsWith("group:")) {
+          stale.streaming = false;
+          this.notifyIdle(stale);
+        }
+      } else {
+        await this.waitUntilIdle(botId, 120_000);
+      }
     } else if (state.streaming) {
       await this.waitUntilIdle(botId, 20_000);
       const again = this.live.get(botId);
@@ -1392,7 +1410,10 @@ export class BotManager {
       }
     }
     const live = this.live.get(botId);
-    if (!live || !this.bridge?.connected) return [];
+    if (!live || !this.bridge?.connected) {
+      console.warn(`[bots] ${botId} group turn skipped (live=${!!live}, bridge=${!!this.bridge?.connected})`);
+      return [];
+    }
     if (live.streaming && live.channel !== channel) {
       // 另一频道还在忙：交给 sendPrompt 排队，不把那边掐掉
     } else if (live.streaming) {
@@ -1408,13 +1429,15 @@ export class BotManager {
     const soft = setTimeout(() => this.abort(botId, channel), GROUP_MEMBER_TIMEOUT_MS);
     const hard = setTimeout(() => {
       const current = this.live.get(botId);
-      if (current) this.abandonGroupMemberTurn(current);
+      if (current) this.abandonGroupMemberTurn(botId, current);
     }, GROUP_MEMBER_TIMEOUT_MS + 15_000);
     const ok = await this.sendPrompt(botId, prompt, "group", undefined, false, channel, sessionName);
     if (!ok) {
+      // 提示词根本没送进去（会话切换失败、桥断开等），房间里不会有任何痕迹。
+      console.warn(`[bots] ${botId} group prompt was not delivered on ${channel}`);
       clearTimeout(soft);
       clearTimeout(hard);
-      this.abandonGroupMemberTurn(live);
+      this.abandonGroupMemberTurn(botId, live);
       return [];
     }
     try {
@@ -1456,14 +1479,21 @@ export class BotManager {
     state.groupStarted = false;
     const fallback = state.usedAnyTool ? undefined : state.lastAssistantText;
     const posts = takeGroupPosts(state.groupSends, fallback);
+    if (posts.length === 0) {
+      // 被点名却一句话没落到房间，是群聊最难查的故障：分清主动 pass 和忘记发言。
+      console.warn(
+        `[bots] ${botId} group turn produced nothing (sends=${state.groupSends.length}, usedTool=${state.usedAnyTool}, draft=${state.lastAssistantText.length}c)`,
+      );
+    }
     state.groupSends = [];
     if (posts.length) state.lastAssistantText = posts.map((post) => post.text).join("\n");
     this.endGroupTurn(botId);
     done(posts);
   }
 
-  private abandonGroupMemberTurn(state: LiveBot) {
+  private abandonGroupMemberTurn(botId: string, state: LiveBot) {
     const done = state.groupDone;
+    if (done) console.warn(`[bots] ${botId} group turn abandoned on ${state.channel}`);
     state.groupDone = null;
     state.groupSends = [];
     this.notifyIdle(state);

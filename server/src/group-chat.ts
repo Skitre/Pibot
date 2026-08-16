@@ -138,17 +138,31 @@ export function lastPostSignal(posts: GroupPost[]): { next: string[]; done: bool
   return { next, done };
 }
 
+/** 模型常把花名册整行抄回来（「名字 — 角色」「名字（角色）」），精确匹配不到就退到分隔符前一段。 */
+function nameNeedles(raw: string): string[] {
+  const full = raw.trim();
+  if (!full) return [];
+  const head = full.split(/\s*[—–\-(（:：]/, 1)[0].trim();
+  const out = [full.toLowerCase()];
+  if (head && head !== full) out.push(head.toLowerCase());
+  return out;
+}
+
 export function resolveMembersByNames<T extends GroupMember>(members: T[], names: string[]): T[] {
   if (names.length === 0 || members.length === 0) return [];
   const rosterNames = members.map((member) => member.name);
   const seen = new Set<string>();
   const out: T[] = [];
   for (const raw of names) {
-    const needle = raw.trim().toLowerCase();
-    if (!needle) continue;
-    const hit = members.find((member) =>
-      mentionKeysFor(member.name, rosterNames).some((key) => key.toLowerCase() === needle),
-    );
+    const needles = nameNeedles(raw);
+    if (needles.length === 0) continue;
+    let hit: T | undefined;
+    for (const needle of needles) {
+      hit = members.find((member) =>
+        mentionKeysFor(member.name, rosterNames).some((key) => key.toLowerCase() === needle),
+      );
+      if (hit) break;
+    }
     if (!hit || seen.has(hit.id)) continue;
     seen.add(hit.id);
     out.push(hit);
@@ -247,20 +261,26 @@ export function lastMessages(lines: ChatLine[], n: number): ChatLine[] {
   return lines.length <= n ? lines : lines.slice(-n);
 }
 
+/** 落库仍是 You；提示词里必须写成 User。You are Judy + You: 大家好 会被模型认成自己已经说过。 */
+function promptAuthor(author: string): string {
+  return author === "You" ? "User" : author;
+}
+
 export function formatChatLines(lines: ChatLine[]): string {
   if (lines.length === 0) return "(no new messages)";
   return lines
     .map((line) => {
       const kind = line.kind ?? "text";
+      const who = promptAuthor(line.author);
       const body = line.content.length > 800 ? `${line.content.slice(0, 800)}…` : line.content;
       if (kind === "system") return `[system] ${body}`;
-      if (kind === "file") return `${line.author} shared file: ${body}`;
+      if (kind === "file") return `${who} shared file: ${body}`;
       if (kind === "tool") {
         const preview = body.replace(/\s+/g, " ").trim().slice(0, 120);
-        return `${line.author} used a tool${preview ? `: ${preview}` : ""}`;
+        return `${who} used a tool${preview ? `: ${preview}` : ""}`;
       }
-      if (kind === "handoff") return `${line.author} (handoff): ${body}`;
-      return `${line.author}: ${body}`;
+      if (kind === "handoff") return `${who} (handoff): ${body}`;
+      return `${who}: ${body}`;
     })
     .join("\n");
 }
@@ -304,6 +324,7 @@ export function buildGroupMemberSystemPrompt(
     .join("\n");
   return [
     `You are ${botName} in the group thread "${groupName}".`,
+    "In the transcript, the human user is labeled User. That is not you.",
     "This pi session is only this group. Your private 1:1 with the user is a separate session. Do not mention or leak that 1:1.",
     "Shared computer, files, and memory apply to both.",
     `Teammates:\n${teammates || "(none)"}`,

@@ -6,6 +6,7 @@ import type {
   Computer,
   Group,
   GroupMessage,
+  GroupModeratorInput,
   McpServer,
   Message,
   ModelProfile,
@@ -34,6 +35,7 @@ interface State {
   groupUnread: Record<string, boolean>;
   groupRunning: Record<string, boolean>;
   groupRunBots: Record<string, string[]>;
+  groupAssigning: Record<string, boolean>;
   botSkillEpoch: number;
 }
 
@@ -59,6 +61,7 @@ class Store {
     groupUnread: {},
     groupRunning: {},
     groupRunBots: {},
+    groupAssigning: {},
     botSkillEpoch: 0,
   };
   private listeners = new Set<Listener>();
@@ -217,9 +220,34 @@ class Store {
       case "group_run": {
         const groupRunning = { ...this.state.groupRunning, [msg.groupId]: !!msg.running };
         const groupRunBots = { ...this.state.groupRunBots };
+        const groupAssigning = { ...this.state.groupAssigning };
         if (msg.running && Array.isArray(msg.botIds)) groupRunBots[msg.groupId] = msg.botIds;
-        if (!msg.running) delete groupRunBots[msg.groupId];
-        this.set({ groupRunning, groupRunBots });
+        if (!msg.running) {
+          delete groupRunBots[msg.groupId];
+          delete groupAssigning[msg.groupId];
+        }
+        this.set({ groupRunning, groupRunBots, groupAssigning });
+        break;
+      }
+      case "group_moderator_state": {
+        const groupAssigning: Record<string, boolean> = {};
+        const ids = Array.isArray(msg.groupIds) ? (msg.groupIds as string[]) : [];
+        for (const id of ids) groupAssigning[id] = true;
+        this.set({ groupAssigning });
+        break;
+      }
+      case "group_moderator": {
+        const groupId = String(msg.groupId ?? "");
+        if (!groupId) break;
+        const groupAssigning = { ...this.state.groupAssigning, [groupId]: !!msg.assigning };
+        if (!msg.assigning) delete groupAssigning[groupId];
+        this.set({ groupAssigning });
+        break;
+      }
+      case "group_update": {
+        const group = msg.group as Group | undefined;
+        if (!group?.id) break;
+        this.patchGroup(group);
         break;
       }
       case "working_state": {
@@ -283,11 +311,14 @@ class Store {
         delete groupRunning[msg.id];
         const groupRunBots = { ...this.state.groupRunBots };
         delete groupRunBots[msg.id];
+        const groupAssigning = { ...this.state.groupAssigning };
+        delete groupAssigning[msg.id];
         this.set({
           groups: this.state.groups.filter((g) => g.id !== msg.id),
           groupUnread,
           groupRunning,
           groupRunBots,
+          groupAssigning,
         });
         break;
       }
@@ -345,6 +376,19 @@ class Store {
   async refreshGroups() {
     const { groups } = await api.listGroups();
     this.set({ groups });
+  }
+
+  private patchGroup(group: Group) {
+    const groups = this.state.groups.some((g) => g.id === group.id)
+      ? this.state.groups.map((g) => (g.id === group.id ? { ...g, ...group } : g))
+      : [...this.state.groups, group];
+    this.set({ groups });
+  }
+
+  async updateGroupModerator(groupId: string, input: GroupModeratorInput) {
+    const { group } = await api.updateGroupModerator(groupId, input);
+    this.patchGroup(group);
+    return group;
   }
 
   send(msg: Record<string, unknown>) {

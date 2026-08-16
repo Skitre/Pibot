@@ -38,6 +38,24 @@ interface GroupRow {
   created_at: number;
   last_message?: string;
   last_activity?: number;
+  moderator_name?: string;
+  moderator_profile_id?: string | null;
+  moderator_instructions?: string;
+  moderator_max_tokens?: number;
+  moderator_history?: number;
+  moderator_thinking?: string;
+}
+
+export interface GroupModeratorInput {
+  name?: string;
+  profileId?: string | null;
+  instructions?: string;
+  /** 0 表示继承所选档案 */
+  maxTokens?: number;
+  /** 0 表示继承 GROUP_HISTORY_WINDOW */
+  history?: number;
+  /** 空表示不发送思考参数 */
+  thinking?: string;
 }
 
 interface TurnState {
@@ -48,6 +66,8 @@ interface TurnState {
   lastSpeakerId: string | null;
   userTask: string;
   rescued: Set<string>;
+  triedSilent: Set<string>;
+  silentRounds: number;
 }
 
 export class GroupError extends Error {
@@ -61,6 +81,12 @@ export class GroupError extends Error {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** 主持人那几个覆盖项统一用 0 表示继承，负数和非法值一律当没设置。 */
+function clampNonNegative(value: number | undefined): number {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
 }
 
 function previewLine(text: string): string {
@@ -91,6 +117,7 @@ export class GroupManager {
   private activeLoop = new Map<string, number>();
   private speaking = new Map<string, string>();
   private turnOrigin = new Map<string, "user" | "handoff">();
+  private assigning = new Set<string>();
 
   listGroups(): GroupRow[] {
     const rows = db
@@ -140,6 +167,25 @@ export class GroupManager {
     return db.prepare("SELECT * FROM groups WHERE id = ?").get(id) as GroupRow;
   }
 
+  updateModerator(groupId: string, input: GroupModeratorInput): GroupRow {
+    const group = this.getGroup(groupId);
+    if (!group) throw new GroupError(404, "group not found");
+    const name = (input.name ?? group.moderator_name ?? "主持人").trim() || "主持人";
+    const instructions = (input.instructions ?? group.moderator_instructions ?? "").trim();
+    let profileId = input.profileId === undefined ? (group.moderator_profile_id ?? null) : input.profileId;
+    if (profileId === "") profileId = null;
+    const maxTokens = clampNonNegative(input.maxTokens ?? group.moderator_max_tokens);
+    const history = clampNonNegative(input.history ?? group.moderator_history);
+    const thinking = (input.thinking ?? group.moderator_thinking ?? "").trim();
+    db.prepare(
+      `UPDATE groups SET moderator_name = ?, moderator_profile_id = ?, moderator_instructions = ?,
+       moderator_max_tokens = ?, moderator_history = ?, moderator_thinking = ? WHERE id = ?`,
+    ).run(name, profileId, instructions, maxTokens, history, thinking, groupId);
+    const next = this.getGroup(groupId)!;
+    this.broadcast({ type: "group_update", group: next });
+    return next;
+  }
+
   messages(groupId: string) {
     return db
       .prepare("SELECT * FROM group_messages WHERE group_id = ? ORDER BY id ASC")
@@ -155,6 +201,7 @@ export class GroupManager {
     this.epoch.delete(groupId);
     this.activeLoop.delete(groupId);
     this.turnOrigin.delete(groupId);
+    this.setAssigning(groupId, false);
     for (const [botId, gid] of this.speaking) {
       if (gid === groupId) this.speaking.delete(botId);
     }
@@ -235,6 +282,16 @@ export class GroupManager {
       .map((id) => ({ id, botIds: this.members(id).map((member) => member.id) }));
   }
 
+  assigningGroups(): string[] {
+    return [...this.assigning];
+  }
+
+  private setAssigning(groupId: string, on: boolean) {
+    if (on) this.assigning.add(groupId);
+    else this.assigning.delete(groupId);
+    this.broadcast({ type: "group_moderator", groupId, assigning: on });
+  }
+
   private chatLines(groupId: string): ChatLine[] {
     const rows = db
       .prepare("SELECT author, content, kind, bot_id FROM group_messages WHERE group_id = ? ORDER BY id ASC")
@@ -245,6 +302,11 @@ export class GroupManager {
       kind: row.kind,
       botId: row.bot_id,
     }));
+  }
+
+  /** 编排器写的系统行只给界面看。回灌进提示词，成员会读到调度内幕，主持人会读到自己上一次的派单理由。 */
+  private promptLines(groupId: string): ChatLine[] {
+    return this.chatLines(groupId).filter((line) => (line.kind ?? "text") !== "system");
   }
 
   private budgetHit(groupId: string, state: TurnState): string | null {
@@ -283,6 +345,8 @@ export class GroupManager {
       lastSpeakerId: null,
       userTask: latestUserTask(this.chatLines(groupId)),
       rescued: new Set(),
+      triedSilent: new Set(),
+      silentRounds: 0,
     };
 
     let queue =
@@ -336,12 +400,19 @@ export class GroupManager {
             console.log(
               `[groups] ${groupId} moderator done ignored (no member posts yet), pick ${pick.name}`,
             );
+            this.noteAssignment(groupId, `先请 ${pick.name} 开口。`);
             queue = [pick];
           } else if (decision.done || decision.next.length === 0) {
             this.stopWith(groupId, epoch, decision.reason || "No one left to speak.");
             return;
           } else {
             queue = resolveMembersByNames(members, decision.next);
+            if (queue.length) {
+              this.noteAssignment(
+                groupId,
+                decision.reason || `请 ${queue.map((member) => member.name).join("、")} 接着说。`,
+              );
+            }
           }
         }
 
@@ -364,8 +435,8 @@ export class GroupManager {
             return;
           }
           const posts = await this.runOneTurn(groupId, bot, epoch);
-          state.lastSpeakerId = bot.id;
           const spoken = posts.filter((post) => !isSilentPost(post)).length;
+          if (spoken > 0) state.lastSpeakerId = bot.id;
           state.speakCount.set(bot.id, (state.speakCount.get(bot.id) ?? 0) + spoken);
           const signal = lastPostSignal(posts);
           if (signal.done) {
@@ -379,9 +450,19 @@ export class GroupManager {
           this.stopWith(groupId, epoch, "Task complete.");
           return;
         }
+        const totalSpoken = [...state.speakCount.values()].reduce((sum, n) => sum + n, 0);
+        if (!lastNext.length && totalSpoken === 0) {
+          for (const bot of batch) state.triedSilent.add(bot.id);
+          state.silentRounds += 1;
+          if (state.triedSilent.size >= members.length || state.silentRounds >= members.length) {
+            this.stopWith(groupId, epoch, "Nobody was able to speak. Send again in a moment.");
+            return;
+          }
+        }
         if (lastNext.length) pending = { next: lastNext, done: false };
       }
     } finally {
+      this.setAssigning(groupId, false);
       if (this.activeLoop.get(groupId) === epoch) this.activeLoop.delete(groupId);
       if (!this.isTurnActive(groupId)) {
         this.broadcast({ type: "group_run", groupId, running: false });
@@ -389,22 +470,51 @@ export class GroupManager {
     }
   }
 
+  private hostName(groupId: string): string {
+    return this.getGroup(groupId)?.moderator_name?.trim() || "主持人";
+  }
+
+  private noteAssignment(groupId: string, reason: string) {
+    const text = reason.trim();
+    if (!text) return;
+    const host = this.hostName(groupId);
+    const line = text.startsWith(host) ? text : `${host}：${text}`;
+    this.saveGroupMessage(groupId, host, line, null, "system");
+  }
+
   private async askModerator(groupId: string, state: TurnState, members: BotRow[]) {
-    const turnLines = this.turnSlice(groupId, this.chatLines(groupId));
+    const turnLines = this.turnSlice(groupId, this.promptLines(groupId));
     const speakCounts: Record<string, number> = {};
     for (const member of members) speakCounts[member.id] = state.speakCount.get(member.id) ?? 0;
-    const decision = await moderate(this.profiles, {
-      task: state.userTask,
-      roster: members.map((member) => ({ id: member.id, name: member.name, role: member.role })),
-      transcript: formatChatLines(lastMessages(turnLines, GROUP_HISTORY_WINDOW)),
-      speakCounts,
-      files: fileNamesFromLines(turnLines),
-      lastSpeakerId: state.lastSpeakerId,
-    });
-    console.log(
-      `[groups] ${groupId} moderator source=${decision.source} next=[${decision.next.join(",")}] reason=${decision.reason}`,
-    );
-    return decision;
+    const group = this.getGroup(groupId);
+    this.setAssigning(groupId, true);
+    try {
+      const decision = await moderate(
+        this.profiles,
+        {
+          task: state.userTask,
+          roster: members.map((member) => ({ id: member.id, name: member.name, role: member.role })),
+          transcript: formatChatLines(
+            lastMessages(turnLines, group?.moderator_history || GROUP_HISTORY_WINDOW),
+          ),
+          speakCounts,
+          files: fileNamesFromLines(turnLines),
+          lastSpeakerId: state.lastSpeakerId,
+          extraInstructions: group?.moderator_instructions ?? "",
+        },
+        {
+          profileId: group?.moderator_profile_id,
+          maxTokens: group?.moderator_max_tokens,
+          thinking: group?.moderator_thinking,
+        },
+      );
+      console.log(
+        `[groups] ${groupId} moderator source=${decision.source} next=[${decision.next.join(",")}] reason=${decision.reason}`,
+      );
+      return decision;
+    } finally {
+      this.setAssigning(groupId, false);
+    }
   }
 
   private handoffTargets(members: BotRow[], lines: ChatLine[]): BotRow[] {
@@ -420,7 +530,7 @@ export class GroupManager {
     if (!group) return [];
     const channel = `group:${groupId}`;
     const seed = !this.bots.hasSession(bot.id, channel);
-    const lines = this.chatLines(groupId);
+    const lines = this.promptLines(groupId);
     const roster = this.members(groupId);
     const prompt = seed
       ? buildGroupSeedPrompt(bot.name, group.name, roster, bot.id, lines)

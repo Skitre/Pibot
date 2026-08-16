@@ -40,7 +40,7 @@ const emptyForm: ProfileInput = {
   visionProfileId: null,
   thinking: "off",
   contextWindow: 200000,
-  maxTokens: 8192,
+  maxTokens: 65536,
 };
 
 export function SettingsModal({ onClose, initialTab = "models" }: Props) {

@@ -53,7 +53,14 @@ CREATE TABLE IF NOT EXISTS routines (
 CREATE TABLE IF NOT EXISTS groups (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  moderator_name TEXT NOT NULL DEFAULT '主持人',
+  moderator_profile_id TEXT,
+  moderator_instructions TEXT NOT NULL DEFAULT '',
+  -- 0 / '' 表示继承所选模型档案或系统默认
+  moderator_max_tokens INTEGER NOT NULL DEFAULT 0,
+  moderator_history INTEGER NOT NULL DEFAULT 0,
+  moderator_thinking TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS group_members (
   group_id TEXT NOT NULL,
@@ -84,7 +91,7 @@ CREATE TABLE IF NOT EXISTS model_profiles (
   reasoning INTEGER NOT NULL DEFAULT 0,
   thinking TEXT NOT NULL DEFAULT 'off',
   context_window INTEGER NOT NULL DEFAULT 200000,
-  max_tokens INTEGER NOT NULL DEFAULT 8192,
+  max_tokens INTEGER NOT NULL DEFAULT 65536,
   is_default INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL
 );
@@ -194,7 +201,33 @@ if (!groupMessageCols.some((c) => c.name === "meta")) {
   db.exec("ALTER TABLE group_messages ADD COLUMN meta TEXT");
 }
 
+const groupCols = db.prepare("PRAGMA table_info(groups)").all() as { name: string }[];
+const groupMigrations: Array<[string, string]> = [
+  ["moderator_name", "TEXT NOT NULL DEFAULT '主持人'"],
+  ["moderator_profile_id", "TEXT"],
+  ["moderator_instructions", "TEXT NOT NULL DEFAULT ''"],
+  ["moderator_max_tokens", "INTEGER NOT NULL DEFAULT 0"],
+  ["moderator_history", "INTEGER NOT NULL DEFAULT 0"],
+  ["moderator_thinking", "TEXT NOT NULL DEFAULT ''"],
+];
+for (const [name, definition] of groupMigrations) {
+  if (!groupCols.some((c) => c.name === name)) {
+    db.exec(`ALTER TABLE groups ADD COLUMN ${name} ${definition}`);
+  }
+}
+
 export default db;
+
+export function getAppSetting(key: string): string | null {
+  const row = db.prepare("SELECT value FROM app_settings WHERE key = ?").get(key) as { value: string } | undefined;
+  return row?.value ?? null;
+}
+
+export function setAppSetting(key: string, value: string) {
+  db.prepare(
+    "INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+  ).run(key, value);
+}
 
 export interface BotRow {
   id: string;

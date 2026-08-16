@@ -91,6 +91,22 @@ export interface Group {
   created_at: number;
   last_message?: string;
   last_activity?: number;
+  moderator_name?: string;
+  moderator_profile_id?: string | null;
+  moderator_instructions?: string;
+  moderator_max_tokens?: number;
+  moderator_history?: number;
+  moderator_thinking?: string;
+}
+
+/** 主持人覆盖项：数字 0 与空字符串都表示继承。 */
+export interface GroupModeratorInput {
+  name?: string;
+  profileId?: string | null;
+  instructions?: string;
+  maxTokens?: number;
+  history?: number;
+  thinking?: string;
 }
 
 export interface GroupMessage {

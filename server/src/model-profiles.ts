@@ -40,6 +40,28 @@ export interface ContainerModelConfig {
   visionHelper?: VisionHelperConfig;
 }
 
+/** 思考强度档位映射成各家接口认的值。off / 空 / 认不出的一律返回 null，表示不发送。 */
+function reasoningEffort(level?: string): "low" | "medium" | "high" | null {
+  switch ((level ?? "").trim().toLowerCase()) {
+    case "minimal":
+    case "low":
+      return "low";
+    case "medium":
+      return "medium";
+    case "high":
+    case "xhigh":
+      return "high";
+    default:
+      return null;
+  }
+}
+
+/** Anthropic 要的是思考预算而不是档位，且必须小于 max_tokens。 */
+function thinkingBudget(effort: "low" | "medium" | "high", maxTokens: number): number {
+  const wanted = effort === "low" ? 2048 : effort === "medium" ? 8192 : 16384;
+  return Math.max(1024, Math.min(wanted, maxTokens - 1024));
+}
+
 export class ModelProfileStore {
   constructor(cfg: AppConfig) {
     // 首次启动时，把 config.json 里的中转配置导入成第一个档案，避免用户重复配置
@@ -233,15 +255,19 @@ export class ModelProfileStore {
     }
   }
 
-  /** 宿主直连补全。复用 test() 的三种 API 分支，不带 reasoning。 */
+  /** 宿主直连补全。复用 test() 的三种 API 分支。 */
   async complete(
     p: ModelProfileRow,
     messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
-    opts?: { maxTokens?: number; timeoutMs?: number },
+    opts?: { maxTokens?: number; timeoutMs?: number; thinking?: string },
   ): Promise<{ ok: boolean; text: string; detail: string }> {
     const base = p.base_url.replace(/\/+$/, "");
-    const maxTokens = opts?.maxTokens ?? 256;
+    // 跟随档案里的「最大输出 tokens」：推理模型把思考也算进这个额度，给死值会让
+    // 回复在推理阶段就被 finish=length 截断，content 直接为空。
+    const maxTokens = opts?.maxTokens ?? p.max_tokens ?? 8192;
     const timeoutMs = opts?.timeoutMs ?? 20_000;
+    // 留空就完全不发思考参数：中转不认这些字段时会整条 400，宁可保持端点默认行为。
+    const effort = reasoningEffort(opts?.thinking);
     try {
       if (p.api === "anthropic-messages") {
         const system = messages
@@ -260,6 +286,9 @@ export class ModelProfileStore {
             model: p.model_id,
             max_tokens: maxTokens,
             ...(system ? { system } : {}),
+            ...(effort
+              ? { thinking: { type: "enabled", budget_tokens: thinkingBudget(effort, maxTokens) } }
+              : {}),
             messages: rest.map((message) => ({ role: message.role, content: message.content })),
           }),
           signal: AbortSignal.timeout(timeoutMs),
@@ -272,7 +301,8 @@ export class ModelProfileStore {
         const text = Array.isArray(json?.content)
           ? json.content.filter((block: any) => block?.type === "text").map((block: any) => block.text).join("")
           : "";
-        return { ok: true, text, detail: `HTTP ${res.status}` };
+        const stop = String(json?.stop_reason ?? "");
+        return { ok: true, text, detail: `HTTP ${res.status}${stop ? ` stop=${stop}` : ""}` };
       }
       if (p.api === "openai-responses") {
         const res = await fetch(`${base}/responses`, {
@@ -281,6 +311,7 @@ export class ModelProfileStore {
           body: JSON.stringify({
             model: p.model_id,
             max_output_tokens: maxTokens,
+            ...(effort ? { reasoning: { effort } } : {}),
             input: messages.map((message) => ({ role: message.role, content: message.content })),
           }),
           signal: AbortSignal.timeout(timeoutMs),
@@ -306,6 +337,7 @@ export class ModelProfileStore {
         body: JSON.stringify({
           model: p.model_id,
           max_tokens: maxTokens,
+          ...(effort ? { reasoning_effort: effort } : {}),
           messages: messages.map((message) => ({ role: message.role, content: message.content })),
         }),
         signal: AbortSignal.timeout(timeoutMs),
@@ -315,8 +347,11 @@ export class ModelProfileStore {
         return { ok: false, text: "", detail: `HTTP ${res.status}: ${detail}` };
       }
       const json: any = await res.json();
-      const text = String(json?.choices?.[0]?.message?.content ?? "");
-      return { ok: true, text, detail: `HTTP ${res.status}` };
+      const choice = json?.choices?.[0];
+      const text = String(choice?.message?.content ?? "");
+      // 推理模型烧完预算时 content 为空、finish_reason=length，不带出去就只能看到「空回复」。
+      const finish = String(choice?.finish_reason ?? "");
+      return { ok: true, text, detail: `HTTP ${res.status}${finish ? ` finish=${finish}` : ""}` };
     } catch (err) {
       return { ok: false, text: "", detail: `Connection failed: ${(err as Error).message}` };
     }
