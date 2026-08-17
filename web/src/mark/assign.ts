@@ -9,6 +9,14 @@ export const MARK_SHAPES = [
   "hex",
   "cloud",
   "teardrop",
+  "diamond",
+  "shield",
+  "capsule",
+  "bean",
+  "moon",
+  "leaf",
+  "arch",
+  "heart",
 ] as const;
 
 export type MarkShape = (typeof MARK_SHAPES)[number];

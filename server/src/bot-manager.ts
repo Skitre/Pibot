@@ -58,7 +58,24 @@ const AVATAR_COLORS = [
   "#FF309B",
   "#777777",
 ];
-const AVATAR_SHAPES = ["blob", "pebble", "squircle", "tablet", "wedge", "hex", "cloud", "teardrop"] as const;
+const AVATAR_SHAPES = [
+  "blob",
+  "pebble",
+  "squircle",
+  "tablet",
+  "wedge",
+  "hex",
+  "cloud",
+  "teardrop",
+  "diamond",
+  "shield",
+  "capsule",
+  "bean",
+  "moon",
+  "leaf",
+  "arch",
+  "heart",
+] as const;
 
 export type BotLook = {
   avatar_color?: string;
