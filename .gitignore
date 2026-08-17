@@ -4,3 +4,4 @@ dist/
 .env
 server/data/
 design-refs/*.mp4
+server/config.json
