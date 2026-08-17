@@ -5,3 +5,7 @@ dist/
 server/data/
 design-refs/*.mp4
 server/config.json
+findings.md
+progress.md
+task_plan.md
+handoff-host-sdk.md
