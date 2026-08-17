@@ -68,6 +68,8 @@ class Store {
   };
   private listeners = new Set<Listener>();
   private ws: WebSocket | null = null;
+  private started = false;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private loadedBots = new Set<string>();
   private loadedGroups = new Set<string>();
   /** 当前正在看的 Bot / 群（App 同步过来），它的新消息不算未读 */
@@ -86,6 +88,8 @@ class Store {
   }
 
   async init() {
+    if (this.started) return;
+    this.started = true;
     const [{ bots }, { groups }, { profiles }, { skills }, { servers }, { rules }] =
       await Promise.all([
       api.listBots(),
@@ -143,13 +147,26 @@ class Store {
   }
 
   private connect() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.ws) {
+      const prev = this.ws;
+      prev.onclose = null;
+      prev.onmessage = null;
+      prev.onopen = null;
+      if (prev.readyState === WebSocket.OPEN || prev.readyState === WebSocket.CONNECTING) prev.close();
+      this.ws = null;
+    }
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const ws = new WebSocket(`${proto}://${location.host}/ws`);
     this.ws = ws;
     ws.onopen = () => this.set({ connected: true });
     ws.onclose = () => {
+      if (this.ws !== ws) return;
       this.set({ connected: false });
-      setTimeout(() => this.connect(), 1500);
+      this.reconnectTimer = setTimeout(() => this.connect(), 1500);
     };
     ws.onmessage = (e) => this.handle(JSON.parse(e.data));
   }

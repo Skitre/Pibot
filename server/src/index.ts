@@ -491,7 +491,6 @@ app.post("/api/computer/restart", async () => {
 });
 
 app.post("/api/computer/stop", async () => {
-  groups.abortActive();
   await bots.stopComputer();
   return { computer: bots.getComputer() };
 });

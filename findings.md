@@ -1,120 +1,99 @@
-# Findings: 群聊自然回应 + 第二批缺陷
+# Findings: Host SDK 迁移
 
 ## Requirements
-- 非任务场景也要有人开口；不要用关键词/正则/分类表决定谁说话
-- send_message 增加结构化 pass
-- 修 resolveMembersByNames 顺序、救场连叫、单回合上限、ComputerPanel deps
-- 查清 pi 消失但 status=online；删遗留测试群
-- 三个真实场景贴 transcript；没验证的必须写「没验证」
+- 脑子从容器 `pi --mode rpc` 迁到本机 `@earendil-works/pi-coding-agent`（server devDependency `^0.84.1`，不是 Cursor SDK）
+- 关电脑后 1:1/群仍能聊；bash/浏览器/截屏不可用时说「电脑离线」
+- 1:1 与群不同 system；Host 规则不进 session jsonl
+- SDK cwd ≠ Windows 工程目录 / 用户桌面；工具经 ComputerAccess 打容器 `/config/...`
+- 不重写群编排；不搬 widget / reply_to / cloud agent
 
 ## Research Findings
-- 上一轮三层提示词把「没任务」写成「闭嘴 / pass」，主持人还硬性 Prefer one next speaker。
-- `isPassContent` 只认字面 `(pass)`。模型把「保持待命」写成正文，就会落库。
-- `resolveMembersByNames` 改成 `members.filter` 后输出变成花名册顺序，`mergeNextNames` 的输入顺序被丢掉。
-- 救场用 `speakCount==0` 找人：pass 后键存在值仍是 0，且没排除 `lastSpeakerId`，会连叫同一人。
-- `GROUP_MAX_MESSAGES_PER_TURN` 取消截断后没有任何引用；40 条预算不在单回合内检查。
-- `ComputerPanel` 依赖 `[bot]` 会在每次 `bot_update` 重拉 routines。
+
+### 仓库状态
+- HEAD `fedafce`，与交接一致。工作区只脏 `handoff-host-sdk.md`。
+- 根目录没有 `node_modules`。SDK 只写在 `server/package.json`，尚未安装。
+- `DATA_DIR` = `server/data`（SQLite）。本机 session 应落这里，不要写用户文档。
+
+### 今天脑子和电脑绑死的切点（`bot-manager.ts`）
+- `createBot` / `startBot` / `startup` 都 `ensureComputer()`。
+- `startBotSession` 依赖 `this.bridge`，并先 `writeAppendSystem`（docker write）。
+- `sendPrompt`：`!state || !this.bridge?.connected` → 落「Bot is offline」。
+- `doStopComputer`：`dropAllLive` + 非 stopped Bot 进 `resumeBotIds` 并标 `stopped` + 拆桥 + `docker stop`。
+- 同一 Bot 一个 pi；`ensureChannel` 用 `get_state` / `new_session` / `switch_session`。
+- `deliverJob` 发 `{ type:"prompt", message }`，连发时 `streamingBehavior: "steer"`。
+- 群 overlay 今天是 **user 消息**（`buildGroupSeedPrompt` 把 `buildGroupMemberSystemPrompt` 整段贴进 seed）。
+
+### 提示词四层（已存在，迁时不要混）
+- Host：`buildAppendSystemPrompt()` → 今天写 `APPEND_SYSTEM.md`
+- 身份/记忆：容器 `/config/bots/<id>/AGENTS.md`（`ensureBotFiles` 只在缺失时写模板）
+- 群 overlay：`buildGroupMemberSystemPrompt` / seed / turn
+- Voice by surface：1:1 可见正文是声音；群只有 `send_message`
+
+### SDK（已装 0.84.1，对照 `dist/*.d.ts` + `examples/sdk/12-full-control.ts`）
+入口：`createAgentSession`。推荐照 12-full-control：自管 `ResourceLoader` + `SettingsManager.inMemory` + 隔离 `ModelRuntime`。
+
+| 需求 | 已确认 |
+|---|---|
+| 创建 | `createAgentSession({ model, thinkingLevel, modelRuntime, cwd, agentDir, noTools, customTools, resourceLoader, sessionManager, settingsManager })` |
+| 换 system | **没有** `set_system`。自管 `getSystemPrompt()`。`setActiveToolsByName` 会 `_rebuildSystemPrompt` 再读 loader。`session.reload()` 也会 `resourceLoader.reload()` |
+| 自定义工具 | `defineTool` + `customTools`；`noTools: "builtin"` 关掉 read/bash/edit/write |
+| 恢复 session | `SessionManager.create(cwd, sessionDir)` 第二参可指定本机目录；`open(path)` |
+| 流式 | `subscribe`：`message_update` / `tool_execution_*` / `agent_start` / `agent_end`。**没有 `agent_settled`**，用 `agent_end` + `waitForIdle` |
+| abort / steer | `session.abort()`；`prompt(..., { streamingBehavior: "steer" })` |
+| 换模型 | `setModel` / `setThinkingLevel`；档位含 off/minimal/low/medium/high/xhigh |
+| 中转模型 | `ModelRuntime.registerProvider(id, { baseUrl, apiKey, api, models })`，与容器 `pi.registerProvider("pibot", …)` 同形。`ModelRuntime.create({ authPath, modelsPath })` 指向 `server/data`，不要 `~/.pi/agent` |
+
+Windows 硬坑（Slice C 必须避开）：
+- `createAgentSession` 对 cwd 做 `resolvePath`。Windows 上 `isAbsolute("/config/bots/x")===true`，会变成 `C:\config\bots\x`
+- `buildSystemPrompt` 在 customPrompt 末尾会追加 `Current working directory: ${cwd}`
+- 做法：`noTools: "builtin"`；cwd/agentDir 用 `server/data/...` 隔离目录（不是工程根、不是用户桌面）；system 正文写清容器路径 `/config/bots/<id>` 和 `/config/workspace`；必要时创建后改写 `session.agent.state.systemPrompt` 去掉 Windows cwd 行
+- `DefaultResourceLoader` 会扫 cwd 向上的 AGENTS.md，并可能读 `APPEND_SYSTEM.md`。必须自管 loader：`getAgentsFiles=[]`，`getAppendSystemPrompt=()=>[]`，身份自己拼进 `getSystemPrompt`
+
+`customPrompt` 不会丢掉 pi 底座工具说明以外的东西：有 customPrompt 时用我们的全文 + 可选 context/skills + cwd 行。不要用 `SYSTEM.md` 整份替换的旧路径；我们自己拼 Host 章节 + 身份。
+
+### 电脑文件 API（已有）
+`DockerManager.writeFile`（tar putArchive）、`readFile`（getArchive）、`exec`（已公开）、`removePath`（仅 `/config/bots/...`）。宿主入口是 `ComputerAccess`。浏览器/截屏走容器内 `127.0.0.1:8792` 薄服务（CDP 仍 `127.0.0.1:9222`，**不映射**）。请求/响应当 `/config/.pibot/req-*.json` + curl `-o`，避免 npipe 截断大图。
+
+### 扩展工具（容器 `pibot.ts`）
+社交/记忆：`update_memory` / `send_message` / `message_teammate` / `save_skill` / `request_approval` — 迁宿主。
+电脑：`browser_*` / `computer_screenshot` — 必须仍打容器。
+MCP：用户要求搬本机。HTTP/stdio 都在宿主进程连；stdio cwd=`server/data/mcp-cwd`。关电脑也能聊着用。浏览器登录态仍属电脑，以后薄服务只做浏览器/截屏。
+内置：read/write/edit/bash — 迁完必须经 ComputerAccess，不能打 Windows。
 
 ## Technical Decisions
 | Decision | Rationale |
 |----------|-----------|
-| 主持人按「这条消息期待多少人开口」邀请，宁可多请 | 成员可以 pass；漏请会把用户晾着。不列举消息类型。 |
-| 成员：有话就说，pass=true 才沉默；用用户的语言 | 对应「大家好」被当成没活而不说话 |
-| 结构化 pass 优先，字面 (pass) 仅兜底 | 最后一处靠文本猜意图 |
-| 单回合硬顶 8，在 interceptTool 同时停落库和 groupSends | 保持三者一致；next/done 合并函数本身不改 |
-| 救场：排除 lastSpeaker + rescued 每人一次 | 避免 pass 后反复点同一个人 |
-| `bot_exited intended=true` 时若 status 不是 stopped 则写成 stopped | 不自动拉起，避免用户停掉的 Bot 复活；只修「死了还显示 online」 |
-| ComputerPanel 还原 `[bot?.id]`，旁边加 oxlint-disable | 用户要求还原这行；lint 必须无警告 |
+| 浏览器/截屏：容器薄服务，不映射 9222 | 现有扩展已连容器内 CDP；映射调试口到宿主不安全，Windows 防火墙也烦 |
+| Slice C 可先不做浏览器，bash/读写先经 ComputerAccess | 1:1 验收是问候、列/写 `/config/workspace`、关电脑仍能聊；浏览器可跟薄服务一起做 |
+| 本机 session 落 `server/data/sessions/<botId>/` | 已有 DATA_DIR；关电脑后脑子还在 |
+| 1:1 不注册 send_message | Voice by surface；禁止「必须 SendMessage 才出声」 |
+| 群 session 键 `${botId}::group:<id>`，jsonl 在 `sessions/<botId>/g-<id>` | 与 1:1 隔离；cwd 仍是 Windows-safe 的 agent-cwd |
+| 旧 RPC `bot_sessions` 路径不算 hasSession | 避免空 jsonl 却跳过首轮 transcript |
+| 换人只 drop 离开者 + 刷新 overlay | 不必重启、不必全员重 seed |
+| 关电脑 dropRpcSide 不再 abandon 群回合 | 群已在本机；掐掉会破坏「关电脑还能聊」 |
+| Slice E 删除宿主 RpcBridge，不删镜像里的 pi/bridge.mjs | 交接：先拆宿主路径，镜像后瘦 |
+| 镜像瘦身 1+2：去 pi/桥，不重装 Chromium | webtop 无 Node，只补 nodejs+scrot；6.18GB→5.17GB |
+| Phase 9 换底座，不压扁 webtop | apt purge 不减层；用户选「直接干 2」 |
+| 每 Bot 一块屏幕 ≠ 每 Bot 一台电脑 | 同一 VM、同一盘、同一套 cookie；分开的是指针和画面，不是安全边界 |
+| 本档仍共用 :1 + 每 Bot 标签 | 换底座先对齐现有面板；分屏以后再做 |
+| 桌面美化：Greybird-dark + Plank 坞 | XFCE 底栏收不短；Plank 做正中三图标，会话不再起 xfce4-panel |
+| 电脑 online = 容器 running，不再等 8900 桥 | 否则关桥后电脑会永远 starting |
+| 关电脑不 abort 群、不标 Bot stopped | resumeBotIds 只该服务用户点的休眠 |
+| MCP 客户端在本机，不走容器薄服务 | 用户纠正：聊天也要用 MCP，关电脑不该断 |
+| Host 规则只进 `systemPromptOverride`，永不 prepend 到 prompt | 消灭 jsonl 里重复 Tone/Autonomy |
 
-## 第 9 项：pi 进程消失但 status=online
-
-### 桥里谁会停 pi
-- `stopBot()`：只由宿主 `_pibot cmd: stop_bot` 调用（`BotManager.stopBot` / `deleteBot`）。它先把 `session.stopping=true` 再 `kill`，exit 时 `intended=true`。
-- `setModel()`：配置变了才 `s.stopping=false` 然后 kill，走自动重启，`intended=false`。
-- WS `close` **不会**停 Bot。宿主进程被杀掉也不会发 `stop_bot`。
-- 意外退出：`stopping=false`，1 秒后自动 `startBot`；宿主把 status 写成 `starting`。
-
-### 宿主侧的洞
-- `stopBot()` 会先 `setStatus(stopped)` 再发 `stop_bot`。正常路径下 `intended=true` 到达时 DB 已经是 stopped。
-- `bot_exited intended=true` 若没对上一次 `stopBot`（旧进程、状态没写上），旧逻辑原样保留 status，于是 UI 继续 online。
-- 更常见的分裂：电脑/容器重启杀掉全部 pi，宿主 `this.bridge` 还在，旧 `attachBridgeIfNeeded` 直接 return、不再 `start_bot`。上一轮已补拉会话。
-- 本次复查时容器已运行 51 分钟，3 个 `pi` 从 15:43:35 一直活着，TCP `172.17.0.2:8791` ESTAB。用户看到「现在没有 pi」时，更像是上一轮那个洞的残留观察，而不是 `intended=true` 把进程停掉。
-
-### 本次代码
-- 不在 `intended=true` 时自动重启。
-- 若 intended 退出且 status 仍不是 stopped，改写成 stopped，避免假 online。
-
-## 实测 transcript（2026-08-16）
-
-容器扩展已含 `pass:`。`docker cp` 后 stop/start 三个 Bot，新 pi pid 7672/7673/7674。
-
-遗留群 `27149a6c`、`a6642635` 复查时已不在 `/api/groups`（只剩用户自己的 `ttk` / `ttkk`，未动）。
-
-### 场景 A1：「大家好」（群名 `tmp-natural-verify`）——被群名/上次任务带跑
-
-```
-You: 大家好
-Judy: [ls workspace] [write tmp-natural-verify.md]
-Judy: 大家好，我已创建 … 请 @Ashford …
-Ashford: 已完成第 2 步… 请 @蜻蜓队长 …
-蜻蜓队长: 已完成第 3 步… 验证通过
-System: Task complete.
-```
-
-三人用了中文，没有「我保持沉默」。但他们把问候理解成又一次写 md 分工。群名带 verify，且 workspace 里还有上次验证痕迹。
-
-### 场景 A2：「大家好」（群名 `茶水间`，清掉测试 md 后重跑）
-
-```
-You: 大家好
-Ashford: 茶水间有点安静呀～ @Judy @蜻蜓队长 有空来聊聊天，或者有什么需要帮忙的也尽管说 😄
-Judy: 哈哈，茶水间确实有点冷清 😄 @Ashford 我在呢～随时可以帮忙，大家有需要尽管开口。@蜻蜓队长 也来聊聊呗～
-蜻蜓队长: 哈哈来了来了 😄 茶水间就是要热闹点才有氛围嘛。我在的，随时待命——大家想聊啥都行，或者有活儿要搭把手的尽管说！
-System: 大家的问候都已回应，没有更多需要补充的内容。
-```
-
-三人各自一句中文问候，没有 pass 正文，没有造文件。
-
-### 场景 B：具体任务（只要 Judy 写文件）
-
-```
-You: @Judy 请只在共享 workspace 写一个短文件 tmp-natural-task.md，内容写三行「任务验证」。其他人不要动手，Judy 写完就 done。
-Judy: [write] 已完成 ✅ 已在共享 workspace 写入 … 本次任务到此结束。
-System: Task complete.
-```
-
-Ashford / 蜻蜓队长没有开口。放宽主持人没有变成全员都来一句。
-
-### 场景 C：开放讨论
-
-```
-You: 你们怎么看：群聊里要不要默认每条消息都全员回复？请各自用一两句说说理由。
-Judy: 我认为不需要默认全员回复：…
-Ashford: 同意 Judy：不需要全员默认回复。…
-蜻蜓队长: 我也同意不需要全员默认回复。…
-System: Task complete.
-```
-
-三人各自发表看法，中文。
-
-### 回归
-- Judy 私聊「只回复一个词：pong」→ `pong`
-- 讨论开场前对 Judy 发了 `abort channel=main`，三人仍答完
-
-临时群 `3421ff13`、`a97f9367` 已删；`tmp-natural-*.md` 已从 workspace 去掉。
-
-## 没验证
-- 单回合超过 8 条 send_message 是否被 interceptTool 丢掉
-- 救场分支（主持人 done 且发言数 0）是否按 rescued 轮询
-- `resolveMembersByNames` 的输入顺序（本轮没有构造「先 B 后 A」的 next 列表）
-- 模型只写 `(pass)` 字面量、不带 `pass:true` 的旧路径
-- `bot_exited intended=true` 把假 online 改成 stopped（本次 pi 一直活着，没抓到这条事件）
+## Issues Encountered
+| Issue | Resolution |
+|-------|------------|
+| 仓库无 node_modules，无法读 SDK 类型 | Phase 1 先 npm install |
 
 ## Resources
-- server/src/moderator.ts
-- server/src/group-chat.ts
-- server/src/groups.ts
-- server/src/bot-manager.ts
-- bot-image/opt/pibot/extensions/pibot.ts
-- web/src/components/ComputerPanel.tsx
-- bot-image/opt/pibot/bridge.mjs
+- 交接：`handoff-host-sdk.md`
+- SDK 文档：https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/sdk.md
+- 示例：https://github.com/earendil-works/pi/tree/main/packages/coding-agent/examples/sdk
+- `server/src/bot-manager.ts`（deliverJob / startBotSession / doStopComputer / sendPrompt）
+- `server/src/docker-manager.ts`
+- `server/src/prompts/sections.ts`
+- `server/src/group-chat.ts`
+- `bot-image/opt/pibot/bridge.mjs`（ensureBotFiles / startBot）
+- `bot-image/opt/pibot/extensions/pibot.ts`（registerProvider + 工具）

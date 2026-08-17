@@ -10,7 +10,8 @@ import {
   GROUP_MAX_MODERATOR_CALLS,
   GROUP_MAX_WALL_MS,
   GROUP_MIN_MEMBERS,
-  buildGroupSeedPrompt,
+  buildGroupFirstTurnPrompt,
+  buildGroupMemberSystemPrompt,
   buildGroupTurnPrompt,
   countMemberPosts,
   fileNamesFromLines,
@@ -257,17 +258,18 @@ export class GroupManager {
       db.prepare("DELETE FROM group_members WHERE group_id = ?").run(groupId);
       const stmt = db.prepare("INSERT OR IGNORE INTO group_members (group_id, bot_id) VALUES (?,?)");
       for (const botId of nextIds) stmt.run(groupId, botId);
-      this.bots.dropSessionsForGroup(groupId);
+      for (const member of prev) {
+        if (nextSet.has(member.id)) continue;
+        this.bots.dropHostChannel(member.id, `group:${groupId}`);
+        this.saveGroupMessage(groupId, "System", `${member.name} left the thread.`, null, "system");
+      }
       for (const id of nextIds) {
         if (prevSet.has(id)) continue;
         const bot = this.bots.getBot(id);
         if (bot) this.saveGroupMessage(groupId, "System", `${bot.name} joined the thread.`, null, "system");
       }
-      for (const member of prev) {
-        if (nextSet.has(member.id)) continue;
-        this.saveGroupMessage(groupId, "System", `${member.name} left the thread.`, null, "system");
-      }
     }
+    this.refreshMemberSystems(groupId);
 
     const next = this.present(this.getGroup(groupId)!);
     this.broadcast({ type: "group_update", group: next, members: this.members(groupId) });
@@ -673,11 +675,19 @@ export class GroupManager {
     const group = this.getGroup(groupId);
     if (!group) return [];
     const channel = `group:${groupId}`;
-    const seed = !this.bots.hasSession(bot.id, channel);
-    const lines = this.promptLines(groupId);
     const roster = this.members(groupId);
+    const overlay = buildGroupMemberSystemPrompt(
+      bot.name,
+      group.name,
+      roster,
+      bot.id,
+      group.description ?? "",
+    );
+    const seed = !this.bots.hasSession(bot.id, channel);
+    await this.bots.ensureGroupHostSession(bot.id, channel, overlay);
+    const lines = this.promptLines(groupId);
     const prompt = seed
-      ? buildGroupSeedPrompt(bot.name, group.name, roster, bot.id, lines, group.description ?? "")
+      ? buildGroupFirstTurnPrompt(bot.name, group.name, lines)
       : buildGroupTurnPrompt(
           bot.name,
           group.name,
@@ -700,6 +710,23 @@ export class GroupManager {
       this.saveGroupMessage(groupId, bot.name, post.text, bot.id);
     }
     return posts;
+  }
+
+  private refreshMemberSystems(groupId: string) {
+    const group = this.getGroup(groupId);
+    if (!group) return;
+    const roster = this.members(groupId);
+    const channel = `group:${groupId}`;
+    for (const member of roster) {
+      const overlay = buildGroupMemberSystemPrompt(
+        member.name,
+        group.name,
+        roster,
+        member.id,
+        group.description ?? "",
+      );
+      this.bots.updateGroupHostOverlay(member.id, channel, overlay);
+    }
   }
 
   private memberOf(groupId: string, botId: string): boolean {

@@ -1,25 +1,51 @@
-# Bot 的"电脑"：Debian XFCE 网页桌面 + Chromium + pi agent
-FROM lscr.io/linuxserver/webtop:debian-xfce
+# 共享电脑：Debian 13 + XFCE + Chromium + noVNC
+# 不带 webtop / Selkies / Docker-in-Docker / locales-all
+FROM node:20-bookworm-slim AS deps
+WORKDIR /opt/pibot
+COPY opt/pibot/package.json opt/pibot/package-lock.json ./
+RUN npm ci --omit=dev
 
-# 系统依赖：Chromium（真实 deb 包）、桌面截图工具、Node.js 22
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends chromium scrot curl git ca-certificates gnupg && \
-    curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
-    apt-get install -y nodejs && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+FROM debian:trixie-slim
 
-# pi coding agent（全局 CLI，含 SDK/RPC 模式）
-RUN npm install -g @earendil-works/pi-coding-agent && pi --version || true
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    HOME=/config \
+    DISPLAY=:1 \
+    PIBOT_WORKSPACE=/config/workspace
 
-# 桥接服务与扩展（含 playwright-core / ws / typebox 依赖）
+# Node 用 Debian 自带的（trixie 是 20）。npm 不进最终镜像，依赖在上一阶段装好。
+# apt 重试：一次拉 XFCE+Chromium 很容易中途断。
+RUN printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\n' > /etc/apt/apt.conf.d/80-retries \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl \
+        xfce4 xfce4-terminal thunar dbus-x11 \
+        tigervnc-standalone-server \
+        novnc websockify \
+        chromium \
+        nodejs \
+        scrot git \
+        fonts-noto-cjk fonts-noto-color-emoji fonts-liberation \
+        supervisor \
+        procps \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -u 1000 -U -d /config -s /bin/bash abc \
+    && mkdir -p /config /opt/pibot /opt/pibot/bin
+
+# 深色 GTK 主题。单独一层，避免重跑上面那大包。
+RUN apt-get update && apt-get install -y --no-install-recommends greybird-gtk-theme plank \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
 COPY opt/pibot /opt/pibot
-RUN cd /opt/pibot && npm install --omit=dev
+COPY --from=deps /opt/pibot/node_modules /opt/pibot/node_modules
+RUN sed -i 's/\r$//' /opt/pibot/bin/*.sh \
+    && chmod +x /opt/pibot/bin/*.sh /opt/pibot/bin/apply-desktop.sh
 
-# linuxserver 自定义 init 脚本与服务
-# 去 CRLF：仓库可能在 Windows 上检出，带 \r 的脚本在容器里会直接报错
 COPY root/ /
-RUN sed -i 's/\r$//' /custom-cont-init.d/* /custom-services.d/* && \
-    chmod +x /custom-cont-init.d/* /custom-services.d/*
+RUN sed -i 's/\r$//' /opt/pibot/bin/*.sh /etc/supervisor/supervisord.conf /etc/supervisor/conf.d/*.conf \
+    && chmod +x /opt/pibot/bin/*.sh
 
-# 3000: KasmVNC 网页桌面  8791: pi RPC WebSocket 桥
-EXPOSE 3000 8791
+EXPOSE 3000
+VOLUME /config
+ENTRYPOINT ["/opt/pibot/bin/entrypoint.sh"]

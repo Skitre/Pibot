@@ -1,10 +1,22 @@
 import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import db, { BotRow, MessageRow } from "./db.js";
 import { AppConfig } from "./config.js";
+import { ComputerAccess, ComputerOfflineError } from "./computer-access.js";
 import { DockerManager } from "./docker-manager.js";
-import { RpcBridge } from "./rpc-bridge.js";
+import {
+  buildHostSystemPrompt,
+  createHostSession,
+  hostDataPaths,
+  identityTemplate,
+  registerPibotModel,
+  type HostSession,
+} from "./host-agent.js";
 import { ModelProfileStore } from "./model-profiles.js";
 import { SkillStore } from "./skills.js";
+import { HostMcpHub } from "./host-mcp.js";
 import { McpServerStore } from "./mcp-servers.js";
 import { ApprovalRuleStore } from "./approval-rules.js";
 import type { BotSkillRow } from "./skills.js";
@@ -25,7 +37,6 @@ import {
   resolveWorkspacePath,
   toolWritePath,
 } from "./workspace-files.js";
-import { buildAppendSystemPrompt } from "./prompts/sections.js";
 
 type Broadcast = (msg: Record<string, unknown>) => void;
 
@@ -75,10 +86,8 @@ export function parseBotLook(input: { avatar_color?: unknown; avatar_shape?: unk
   return look;
 }
 
-// 共享电脑架构（对齐官方）：整个账户一台容器，Bot 的 pi 进程都在里面。
-// 每个 Bot 的私有目录（记忆/设置）在 /config/bots/<id>/，共享工作区在 /config/workspace。
+// 脑子在本机；容器只当共享电脑。私有目录 /config/bots/<id>/，共享工作区 /config/workspace。
 const memoryPath = (botId: string) => `/config/bots/${botId}/AGENTS.md`;
-const appendSystemPath = (botId: string) => `/config/bots/${botId}/.pi/agent/APPEND_SYSTEM.md`;
 const FILE_CARD_CAP = 12;
 
 export interface Attachment {
@@ -149,6 +158,10 @@ interface PromptJob {
   sessionName?: string;
 }
 
+function hostKey(botId: string, channel = "main") {
+  return `${botId}::${channel}`;
+}
+
 function newLive(): LiveBot {
   return {
     streaming: false,
@@ -170,14 +183,15 @@ function newLive(): LiveBot {
 
 export class BotManager {
   private docker: DockerManager;
-  private bridge: RpcBridge | null = null;
+  readonly computerAccess: ComputerAccess;
   private computer: ComputerState;
   private ensuring: Promise<void> | null = null;
   private restarting: Promise<void> | null = null;
   private stopping: Promise<void> | null = null;
-  /** 关电脑时记下还在跑的 Bot，开机后自动唤醒。 */
-  private resumeBotIds = new Set<string>();
   private live = new Map<string, LiveBot>();
+  private hosts = new Map<string, HostSession>();
+  private groupOverlays = new Map<string, string>();
+  private pendingHostApprovals = new Map<string, { resolve: (value: string | undefined) => void }>();
   private assistantListeners = new Set<(botId: string, text: string) => void>();
   private teammateHandoffListeners = new Set<
     (sender: BotRow, target: BotRow, message: string) => boolean
@@ -187,15 +201,8 @@ export class BotManager {
   private groupPersistListeners = new Set<
     (botId: string, channel: string, kind: string, content: string, meta?: unknown) => void
   >();
-  private pendingRpc = new Map<
-    string,
-    { botId: string; resolve: (value: any) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }
-  >();
-  private pendingMcpTests = new Map<
-    string,
-    { serverId: string; resolve: (value: any) => void; timer: ReturnType<typeof setTimeout> }
-  >();
   private pendingMcpApprovals = new Map<string, { serverId: string; toolName: string }>();
+  private hostMcp: HostMcpHub;
 
   constructor(
     private cfg: AppConfig,
@@ -207,6 +214,11 @@ export class BotManager {
   ) {
     this.docker = new DockerManager(cfg);
     this.computer = { containerId: null, status: "offline", vncPort: cfg.docker.vncBasePort };
+    this.computerAccess = new ComputerAccess(this.docker, () => ({
+      containerId: this.computer.containerId,
+      status: this.computer.status,
+    }));
+    this.hostMcp = new HostMcpHub(() => this.mcpServers.enabledForContainer(this.approvalRules.list()));
   }
 
   onAssistantMessage(fn: (botId: string, text: string) => void) {
@@ -274,11 +286,90 @@ export class BotManager {
   }
 
   hasSession(botId: string, channel: string) {
+    if (channel.startsWith("group:")) {
+      return !!this.getSessionPath(botId, channel)?.startsWith("host:");
+    }
     return !!this.getSessionPath(botId, channel);
   }
 
+  updateGroupHostOverlay(botId: string, channel: string, overlay: string) {
+    this.groupOverlays.set(hostKey(botId, channel), overlay);
+    const host = this.hosts.get(hostKey(botId, channel));
+    const bot = this.getBot(botId);
+    if (host && bot) host.setSystem(this.composeHostSystem(bot, channel));
+  }
+
+  dropHostChannel(botId: string, channel: string) {
+    const key = hostKey(botId, channel);
+    const host = this.hosts.get(key);
+    if (host) {
+      try {
+        host.dispose();
+      } catch (err) {
+        console.warn(`[bots] dispose host ${key}: ${(err as Error).message}`);
+      }
+      this.hosts.delete(key);
+    }
+    this.groupOverlays.delete(key);
+    db.prepare("DELETE FROM bot_sessions WHERE bot_id = ? AND channel = ?").run(botId, channel);
+  }
+
   dropSessionsForGroup(groupId: string) {
-    db.prepare("DELETE FROM bot_sessions WHERE channel = ?").run(`group:${groupId}`);
+    const channel = `group:${groupId}`;
+    const suffix = `::${channel}`;
+    for (const [key, host] of [...this.hosts]) {
+      if (!key.endsWith(suffix)) continue;
+      try {
+        host.dispose();
+      } catch (err) {
+        console.warn(`[bots] dispose host ${key}: ${(err as Error).message}`);
+      }
+      this.hosts.delete(key);
+      this.groupOverlays.delete(key);
+    }
+    db.prepare("DELETE FROM bot_sessions WHERE channel = ?").run(channel);
+  }
+
+  async ensureGroupHostSession(botId: string, channel: string, overlay: string) {
+    this.groupOverlays.set(hostKey(botId, channel), overlay);
+    const existing = this.hosts.get(hostKey(botId, channel));
+    const bot = this.getBot(botId);
+    if (!bot) return;
+    if (existing) {
+      existing.setSystem(this.composeHostSystem(bot, channel));
+      return;
+    }
+    if (bot.status === "stopped") return;
+    const model = this.containerConfigForBot(bot);
+    if (!model) return;
+    if (!this.live.has(botId)) this.live.set(botId, newLive());
+    const agentsMd = await this.loadAgentsMd(bot);
+    const thinking = isThinkingOverride(bot.thinking_override)
+      ? bot.thinking_override
+      : isThinkingOverride(model.thinking)
+        ? model.thinking
+        : "off";
+    const main = this.hosts.get(hostKey(botId, "main"));
+    const host = await createHostSession({
+      bot,
+      agentsMd,
+      model,
+      thinking,
+      computer: this.computerAccess,
+      channel,
+      systemExtra: overlay,
+      includeSendMessage: true,
+      runtime: main?.runtime,
+      onEvent: (event: AgentSessionEvent) => {
+        const state = this.live.get(botId);
+        if (state) this.handleRpcEvent(botId, state, event);
+      },
+      requestApproval: (requestId, title, message, options) =>
+        this.requestHostApproval(botId, requestId, title, message, options),
+      ...this.hostMcpOpts(),
+    });
+    this.hosts.set(hostKey(botId, channel), host);
+    this.storeSessionPath(botId, channel, `host:${host.session.sessionFile ?? channel}`);
   }
 
   private getSessionPath(botId: string, channel: string): string | undefined {
@@ -294,115 +385,8 @@ export class BotManager {
     ).run(botId, channel, path);
   }
 
-  private channelForPath(botId: string, path: string): string | undefined {
-    const row = db
-      .prepare("SELECT channel FROM bot_sessions WHERE bot_id = ? AND session_path = ?")
-      .get(botId, path) as { channel: string } | undefined;
-    return row?.channel;
-  }
-
   private inGroupSession(botId: string) {
     return (this.live.get(botId)?.channel ?? "").startsWith("group:");
-  }
-
-  private rpc(botId: string, data: Record<string, unknown>, timeoutMs = 20_000): Promise<any> {
-    const id = randomUUID();
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pendingRpc.delete(id);
-        reject(new Error(`rpc ${String(data.type)} timed out`));
-      }, timeoutMs);
-      this.pendingRpc.set(id, { botId, resolve, reject, timer });
-      this.sendToBot(botId, { ...data, id });
-    });
-  }
-
-  private rejectPendingRpc(botId: string) {
-    for (const [id, pending] of this.pendingRpc) {
-      if (pending.botId !== botId) continue;
-      clearTimeout(pending.timer);
-      pending.reject(new Error("bot stopped"));
-      this.pendingRpc.delete(id);
-    }
-  }
-
-  private async ensureChannel(botId: string, channel: string, sessionName?: string): Promise<boolean> {
-    const state = this.live.get(botId);
-    if (!state || !this.bridge?.connected) return false;
-    if (state.switching) {
-      await state.switching.catch(() => false);
-    }
-    if (state.channel === channel && this.getSessionPath(botId, channel)) return true;
-    const run = this.switchChannel(botId, channel, sessionName);
-    state.switching = run;
-    try {
-      return await run;
-    } finally {
-      if (state.switching === run) state.switching = null;
-    }
-  }
-
-  private async switchChannel(botId: string, channel: string, sessionName?: string): Promise<boolean> {
-    const state = this.live.get(botId);
-    if (!state) return false;
-    try {
-      const current = await this.rpc(botId, { type: "get_state" });
-      const currentPath = current?.data?.sessionFile as string | undefined;
-      if (currentPath) {
-        const known = this.channelForPath(botId, currentPath);
-        if (known) state.channel = known;
-        else if (!this.getSessionPath(botId, "main")) {
-          this.storeSessionPath(botId, "main", currentPath);
-          state.channel = "main";
-        }
-      }
-      if (state.channel === channel && this.getSessionPath(botId, channel)) return true;
-
-      if (channel === "main") {
-        const mainPath = this.getSessionPath(botId, "main");
-        if (!mainPath) return true;
-        const res = await this.rpc(botId, { type: "switch_session", sessionPath: mainPath });
-        if (!res?.success || res.data?.cancelled) return false;
-        state.channel = "main";
-        return true;
-      }
-
-      let path = this.getSessionPath(botId, channel);
-      if (!path) {
-        if (!this.getSessionPath(botId, "main") && currentPath) {
-          this.storeSessionPath(botId, "main", currentPath);
-        }
-        const created = await this.rpc(botId, { type: "new_session" });
-        if (!created?.success || created.data?.cancelled) return false;
-        const next = await this.rpc(botId, { type: "get_state" });
-        path = next?.data?.sessionFile as string | undefined;
-        if (!path) return false;
-        this.storeSessionPath(botId, channel, path);
-        if (sessionName) {
-          await this.rpc(botId, { type: "set_session_name", name: sessionName }).catch(() => undefined);
-        }
-        state.channel = channel;
-        return true;
-      }
-
-      const res = await this.rpc(botId, { type: "switch_session", sessionPath: path });
-      if (!res?.success || res.data?.cancelled) {
-        db.prepare("DELETE FROM bot_sessions WHERE bot_id = ? AND channel = ?").run(botId, channel);
-        const created = await this.rpc(botId, { type: "new_session" });
-        if (!created?.success || created.data?.cancelled) return false;
-        const next = await this.rpc(botId, { type: "get_state" });
-        const fresh = next?.data?.sessionFile as string | undefined;
-        if (!fresh) return false;
-        this.storeSessionPath(botId, channel, fresh);
-        state.channel = channel;
-        return true;
-      }
-      state.channel = channel;
-      return true;
-    } catch (err) {
-      console.warn(`[bots] switch ${botId} -> ${channel} failed: ${(err as Error).message}`);
-      return false;
-    }
   }
 
   // ---------- 查询 ----------
@@ -534,9 +518,11 @@ export class BotManager {
 
   // ---------- 共享电脑生命周期 ----------
 
-  /** 确保共享电脑容器在跑、桥接已连接。并发调用会合并成一次。 */
+  /** 确保共享电脑容器在跑。并发调用会合并成一次。 */
   async ensureComputer(): Promise<void> {
-    if (this.computer.status === "online" && this.bridge?.connected) return;
+    if (this.computer.status === "online" && this.computer.containerId) {
+      if (await this.docker.isRunning(this.computer.containerId)) return;
+    }
     if (this.stopping) await this.stopping.catch(() => {});
     if (this.restarting) return this.restarting;
     if (this.ensuring) return this.ensuring;
@@ -559,7 +545,7 @@ export class BotManager {
     return this.restarting;
   }
 
-  /** 关掉共享电脑：停容器、Bot 休眠，卷和文件保留。 */
+  /** 关掉共享电脑：停容器，卷和文件保留。本机 Bot 继续聊。 */
   async stopComputer(): Promise<void> {
     if (this.stopping) return this.stopping;
     this.stopping = (async () => {
@@ -572,59 +558,33 @@ export class BotManager {
     return this.stopping;
   }
 
-  private startEligibleBotSessions() {
-    for (const bot of this.listBots()) {
-      const resume = this.resumeBotIds.has(bot.id);
-      if (bot.status === "stopped" && !resume) continue;
-      this.resumeBotIds.delete(bot.id);
-      this.kickBotSession(bot.id);
-    }
-  }
-
-  private attachBridgeIfNeeded(bridgePort: number) {
-    if (this.bridge) {
-      // 电脑重启后 this.bridge 仍在，旧 WS 会重连。重连成功前命令会进队列。
-      // 这里补拉会话，避免只 dropAllLive 却不再 start_bot。
-      this.startEligibleBotSessions();
-      return;
-    }
-    const bridge = new RpcBridge(bridgePort);
-    this.bridge = bridge;
-    bridge.on("open", () => {
-      this.computer.status = "online";
-      this.broadcastComputer();
-      // 先同步账户级 MCP 配置，再启动 Bot；WS 消息顺序保证新进程读取到最新配置。
-      this.pushMcpConfig();
-      this.startEligibleBotSessions();
+  private markComputerOnline(containerId: string, vncPort: number) {
+    this.computer.containerId = containerId;
+    this.computer.vncPort = vncPort;
+    this.computer.status = "online";
+    this.broadcastComputer();
+    this.refreshMemoriesFromComputer();
+    void this.computerAccess.ensureService().catch((err) => {
+      console.warn(`[computer] service: ${(err as Error).message}`);
     });
-    bridge.on("event", (evt: any) => this.routeEvent(evt));
-    bridge.connect();
   }
 
-  private dropAllLive() {
-    for (const [botId, state] of this.live) {
-      for (const item of state.queue) item.resolve(false);
-      state.queue = [];
-      this.abandonGroupMemberTurn(botId, state);
-      this.rejectPendingRpc(botId);
-      if (state.streaming) {
-        this.broadcast({ type: "working", botId, working: false, channel: state.channel });
-        this.broadcast({ type: "stream_end", botId });
-      }
+  /** 电脑起来后把容器里的 AGENTS.md 同步进本机 system。不唤醒用户休眠的 Bot。 */
+  private refreshMemoriesFromComputer() {
+    for (const bot of this.listBots()) {
+      if (bot.status === "stopped") continue;
+      void this.loadAgentsMd(bot)
+        .then((md) => this.refreshHostSystem(bot.id, md))
+        .catch(() => undefined);
     }
-    this.live.clear();
-    this.groupTurns.clear();
-    this.broadcast({ type: "working_state", bots: [] });
   }
 
   private async doEnsureComputer(): Promise<void> {
     this.computer.status = "starting";
     this.broadcastComputer();
     try {
-      const { containerId, vncPort, bridgePort } = await this.docker.ensureComputer();
-      this.computer.containerId = containerId;
-      this.computer.vncPort = vncPort;
-      this.attachBridgeIfNeeded(bridgePort);
+      const { containerId, vncPort } = await this.docker.ensureComputer();
+      this.markComputerOnline(containerId, vncPort);
     } catch (err) {
       this.computer.status = "offline";
       this.broadcastComputer();
@@ -635,36 +595,17 @@ export class BotManager {
   private async doRestartComputer(): Promise<void> {
     this.computer.status = "starting";
     this.broadcastComputer();
-    this.dropAllLive();
-    for (const bot of this.listBots()) {
-      if (bot.status !== "stopped") this.setStatus(bot.id, "starting");
-    }
     try {
-      const { containerId, vncPort, bridgePort } = await this.docker.restartComputer();
-      this.computer.containerId = containerId;
-      this.computer.vncPort = vncPort;
-      this.attachBridgeIfNeeded(bridgePort);
+      const { containerId, vncPort } = await this.docker.restartComputer();
+      this.markComputerOnline(containerId, vncPort);
     } catch (err) {
       this.computer.status = "offline";
       this.broadcastComputer();
-      for (const bot of this.listBots()) {
-        if (bot.status !== "stopped") this.setStatus(bot.id, "error");
-      }
       throw err;
     }
   }
 
   private async doStopComputer(): Promise<void> {
-    this.dropAllLive();
-    this.resumeBotIds.clear();
-    for (const bot of this.listBots()) {
-      if (bot.status !== "stopped") {
-        this.resumeBotIds.add(bot.id);
-        this.setStatus(bot.id, "stopped");
-      }
-    }
-    this.bridge?.close();
-    this.bridge = null;
     try {
       await this.docker.stopComputer();
     } catch (err) {
@@ -676,27 +617,100 @@ export class BotManager {
     this.broadcastComputer();
   }
 
-  /** Host 规则：每次启动都覆盖写入，pi 读 ~/.pi/agent/APPEND_SYSTEM.md。 */
-  private async writeAppendSystem(botId: string): Promise<void> {
-    const cid = this.computer.containerId ?? (await this.requireComputer());
-    await this.docker.writeFile(
-      cid,
-      appendSystemPath(botId),
-      Buffer.from(buildAppendSystemPrompt(), "utf8"),
-    );
+  private writeMemoryCache(botId: string, content: string) {
+    const paths = hostDataPaths(botId);
+    mkdirSync(paths.memoryDir, { recursive: true });
+    writeFileSync(paths.memoryFile, content, "utf8");
   }
 
-  private kickBotSession(botId: string) {
-    void this.startBotSession(botId).catch((err) => {
-      console.warn(`[bots] start ${botId} failed: ${(err as Error).message}`);
-      this.setStatus(botId, "error");
+  private readMemoryCache(botId: string): string {
+    const paths = hostDataPaths(botId);
+    if (!existsSync(paths.memoryFile)) return "";
+    return readFileSync(paths.memoryFile, "utf8");
+  }
+
+  private async loadAgentsMd(bot: BotRow): Promise<string> {
+    const cached = this.readMemoryCache(bot.id);
+    try {
+      const cid = await this.computerAccess.assertOnline();
+      const buf = await this.docker.readFile(cid, memoryPath(bot.id));
+      if (buf && buf.length > 0) {
+        const text = normalizeAgentsMd(buf.toString("utf8"));
+        this.writeMemoryCache(bot.id, text);
+        return text;
+      }
+      const fresh = identityTemplate(bot.name, bot.role, bot.id);
+      await this.docker.writeFile(cid, memoryPath(bot.id), Buffer.from(fresh, "utf8"));
+      this.writeMemoryCache(bot.id, fresh);
+      return fresh;
+    } catch {
+      if (cached.trim()) return cached;
+      const fresh = identityTemplate(bot.name, bot.role, bot.id);
+      this.writeMemoryCache(bot.id, fresh);
+      return fresh;
+    }
+  }
+
+  private composeHostSystem(bot: BotRow, channel: string, agentsMd?: string) {
+    const base = buildHostSystemPrompt(
+      bot,
+      agentsMd ?? (this.readMemoryCache(bot.id) || identityTemplate(bot.name, bot.role, bot.id)),
+    );
+    if (channel === "main") return base;
+    const extra = this.groupOverlays.get(hostKey(bot.id, channel)) ?? "";
+    return extra ? `${base}\n\n${extra}` : base;
+  }
+
+  private refreshHostSystem(botId: string, agentsMd?: string) {
+    const bot = this.getBot(botId);
+    if (!bot) return;
+    const text = agentsMd ?? (this.readMemoryCache(botId) || identityTemplate(bot.name, bot.role, bot.id));
+    const prefix = `${botId}::`;
+    for (const [key, host] of this.hosts) {
+      if (!key.startsWith(prefix)) continue;
+      const channel = key.slice(prefix.length);
+      host.setSystem(this.composeHostSystem(bot, channel, text));
+    }
+  }
+
+  private async requestHostApproval(
+    botId: string,
+    requestId: string,
+    title: string,
+    message: string,
+    options: string[],
+  ): Promise<string | undefined> {
+    this.saveMessage(botId, "assistant", title || message || "Approval needed", "approval", "", {
+      requestId,
+      method: "select",
+      message,
+      options,
+      placeholder: "",
+      resolved: false,
+    });
+    this.setAttention(botId, true);
+    this.broadcast({
+      type: "approval",
+      botId,
+      requestId,
+      method: "select",
+      title,
+      message,
+      options,
+    });
+    return new Promise((resolve) => {
+      this.pendingHostApprovals.set(`${botId}:${requestId}`, { resolve });
     });
   }
 
-  /** 在共享电脑里启动某个 Bot 的 pi 会话 */
-  private async startBotSession(botId: string) {
+  private async startHostSession(botId: string) {
+    const existing = this.hosts.get(hostKey(botId, "main"));
+    if (existing) {
+      this.setStatus(botId, "online");
+      return;
+    }
     const bot = this.getBot(botId);
-    if (!bot || !this.bridge) return;
+    if (!bot) return;
     const model = this.containerConfigForBot(bot);
     if (!model) {
       this.setStatus(botId, "error");
@@ -704,21 +718,50 @@ export class BotManager {
     }
     if (!this.live.has(botId)) this.live.set(botId, newLive());
     this.setStatus(botId, "starting");
-    try {
-      await this.writeAppendSystem(botId);
-    } catch (err) {
-      console.warn(`[bots] APPEND_SYSTEM.md for ${botId}: ${(err as Error).message}`);
-      this.setStatus(botId, "error");
-      return;
-    }
-    this.bridge.send({
-      type: "_pibot",
-      cmd: "start_bot",
-      botId,
-      name: bot.name,
-      role: bot.role,
+    const agentsMd = await this.loadAgentsMd(bot);
+    const thinking = isThinkingOverride(bot.thinking_override)
+      ? bot.thinking_override
+      : isThinkingOverride(model.thinking)
+        ? model.thinking
+        : "off";
+    const host = await createHostSession({
+      bot,
+      agentsMd,
       model,
+      thinking,
+      computer: this.computerAccess,
+      onEvent: (event: AgentSessionEvent) => {
+        const state = this.live.get(botId);
+        if (state) this.handleRpcEvent(botId, state, event);
+      },
+      requestApproval: (requestId, title, message, options) =>
+        this.requestHostApproval(botId, requestId, title, message, options),
+      ...this.hostMcpOpts(),
     });
+    this.hosts.set(hostKey(botId, "main"), host);
+    const state = this.live.get(botId);
+    if (state && state.channel === "unknown") state.channel = "main";
+    this.setStatus(botId, "online");
+  }
+
+  private disposeHostSession(botId: string) {
+    const prefix = `${botId}::`;
+    for (const [key, host] of [...this.hosts]) {
+      if (!key.startsWith(prefix)) continue;
+      try {
+        host.dispose();
+      } catch (err) {
+        console.warn(`[bots] dispose host ${key}: ${(err as Error).message}`);
+      }
+      this.hosts.delete(key);
+      this.groupOverlays.delete(key);
+    }
+    for (const [key, pending] of this.pendingHostApprovals) {
+      if (key.startsWith(`${botId}:`)) {
+        pending.resolve(undefined);
+        this.pendingHostApprovals.delete(key);
+      }
+    }
   }
 
   // ---------- Bot 生命周期 ----------
@@ -744,38 +787,42 @@ export class BotManager {
     }
 
     try {
-      await this.ensureComputer();
-      await this.startBotSession(id);
+      await this.startHostSession(id);
     } catch (err) {
       this.setStatus(id, "error");
-      this.saveMessage(id, "system", `Failed to start the computer: ${(err as Error).message}`, "system");
+      this.saveMessage(id, "system", `Failed to start: ${(err as Error).message}`, "system");
     }
     return this.getBot(id)!;
   }
 
   async startBot(id: string) {
-    await this.ensureComputer();
-    await this.startBotSession(id);
+    await this.startHostSession(id);
   }
 
   async stopBot(id: string) {
     this.groupTurns.delete(id);
-    this.rejectPendingRpc(id);
     const state = this.live.get(id);
     if (state) this.abandonGroupMemberTurn(id, state);
-    this.bridge?.send({ type: "_pibot", cmd: "stop_bot", botId: id });
+    this.disposeHostSession(id);
     this.live.delete(id);
     this.setStatus(id, "stopped");
   }
 
   async deleteBot(id: string) {
     this.groupTurns.delete(id);
-    this.rejectPendingRpc(id);
     const state = this.live.get(id);
     if (state) this.abandonGroupMemberTurn(id, state);
+    this.disposeHostSession(id);
     db.prepare("DELETE FROM bot_sessions WHERE bot_id = ?").run(id);
-    this.bridge?.send({ type: "_pibot", cmd: "stop_bot", botId: id });
     this.live.delete(id);
+    for (const dir of Object.values(hostDataPaths(id))) {
+      if (dir.endsWith("AGENTS.md")) continue;
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+    }
     // 清掉共享电脑上的私有目录（共享 workspace 里的产物保留，与官方一致）
     if (this.computer.containerId && (await this.docker.isRunning(this.computer.containerId))) {
       try {
@@ -839,10 +886,29 @@ export class BotManager {
               return `- Your role: ${role || "a general-purpose assistant that gets real work done"}.`;
             return l;
           });
-          await this.docker.writeFile(cid, memoryPath(id), Buffer.from(updated.join("\n")));
+          const next = updated.join("\n");
+          await this.docker.writeFile(cid, memoryPath(id), Buffer.from(next));
+          this.writeMemoryCache(id, next);
+          this.refreshHostSystem(id, next);
         }
       } catch (err) {
         console.warn(`[bots] AGENTS.md sync failed for ${id}: ${(err as Error).message}`);
+      }
+    } else {
+      const cached = this.readMemoryCache(id);
+      if (cached) {
+        const next = cached
+          .split("\n")
+          .map((l) => {
+            if (l.startsWith("# You are "))
+              return `# You are ${name.trim() || bot.name}, a persistent AI teammate`;
+            if (l.startsWith("- Your role: "))
+              return `- Your role: ${role || "a general-purpose assistant that gets real work done"}.`;
+            return l;
+          })
+          .join("\n");
+        this.writeMemoryCache(id, next);
+        this.refreshHostSystem(id, next);
       }
     }
 
@@ -862,11 +928,14 @@ export class BotManager {
   // ---------- 附件与共享电脑文件 ----------
 
   private async requireComputer(): Promise<string> {
-    const cid = this.computer.containerId;
-    if (!cid || !(await this.docker.isRunning(cid))) {
-      throw new Error("the shared computer is offline");
+    try {
+      return await this.computerAccess.assertOnline();
+    } catch (err) {
+      if (err instanceof ComputerOfflineError) {
+        throw new Error("the shared computer is offline");
+      }
+      throw err;
     }
-    return cid;
   }
 
   /** 把上传的文件写进共享 workspace，返回容器内路径 */
@@ -908,7 +977,10 @@ export class BotManager {
 
   async setMemory(botId: string, content: string): Promise<void> {
     const cid = await this.requireComputer();
-    await this.docker.writeFile(cid, memoryPath(botId), Buffer.from(normalizeAgentsMd(content), "utf8"));
+    const normalized = normalizeAgentsMd(content);
+    await this.docker.writeFile(cid, memoryPath(botId), Buffer.from(normalized, "utf8"));
+    this.writeMemoryCache(botId, normalized);
+    this.refreshHostSystem(botId, normalized);
   }
 
   private channelLabel(botId: string): string {
@@ -927,6 +999,8 @@ export class BotManager {
       const buf = await this.docker.readFile(cid, memoryPath(botId));
       const next = addMemoryNote(buf ? buf.toString("utf8") : "", kind, note);
       await this.docker.writeFile(cid, memoryPath(botId), Buffer.from(next, "utf8"));
+      this.writeMemoryCache(botId, next);
+      this.refreshHostSystem(botId, next);
     } catch (err) {
       console.warn(`[bots] update_memory failed for ${botId}: ${(err as Error).message}`);
     }
@@ -982,100 +1056,28 @@ export class BotManager {
     }
   }
 
-  // ---------- 事件路由 ----------
-
-  /** 桥接来的消息：{type:"_bridge"...} 桥事件，或 {botId, data} 某个 Bot 的 pi 事件 */
-  private routeEvent(evt: any) {
-    if (evt.type === "_bridge") {
-      this.handleBridgeEvent(evt);
-      return;
-    }
-    if (evt.botId && evt.data) {
-      const state = this.live.get(evt.botId);
-      if (state) this.handleRpcEvent(evt.botId, state, evt.data);
-    }
-  }
-
-  private handleBridgeEvent(evt: any) {
-    switch (evt.event) {
-      case "connected": {
-        this.computer.status = "online";
-        this.broadcastComputer();
-        const running = new Set<string>(evt.running ?? []);
-        for (const id of running) {
-          if (!this.live.has(id)) this.live.set(id, newLive());
-          this.setStatus(id, "online");
-        }
-        for (const bot of this.listBots()) {
-          if (bot.status !== "stopped" && !running.has(bot.id)) this.kickBotSession(bot.id);
-        }
-        return;
-      }
-      case "bot_started":
-        if (!this.live.has(evt.botId)) {
-          this.live.set(evt.botId, newLive());
-        }
-        this.setStatus(evt.botId, "online");
-        // 会话拉起后同步一次生效模型；内容相同桥接不会重启 pi
-        this.pushModelConfig(evt.botId);
-        return;
-      case "bot_exited":
-        if (!this.getBot(evt.botId)) return;
-        if (evt.intended) {
-          // stop_bot 已把进程杀掉。宿主 stopBot 会先写成 stopped；
-          // 若这条退出没对上一次 stopBot（旧进程、状态没写上），不要继续显示 online。
-          // 不在这里自动拉起，避免用户主动停止的 Bot 复活。
-          if (this.getBot(evt.botId)?.status !== "stopped") this.setStatus(evt.botId, "stopped");
-          return;
-        }
-        this.setStatus(evt.botId, "starting");
-        return;
-      case "bot_restarted":
-        if (this.getBot(evt.botId)) this.setStatus(evt.botId, "online");
-        return;
-      case "model_applied":
-        if (evt.changed && evt.botId) {
-          const bot = this.getBot(evt.botId);
-          const profile = bot ? this.profiles.effectiveFor(bot.model_profile_id) : undefined;
-          this.saveMessage(
-            evt.botId,
-            "system",
-            `Switched model to ${profile?.model_name ?? "new configuration"}.`,
-            "system",
-          );
-        }
-        return;
-      case "mcp_test_result": {
-        const pending = this.pendingMcpTests.get(evt.requestId);
-        if (!pending) return;
-        clearTimeout(pending.timer);
-        this.pendingMcpTests.delete(evt.requestId);
-        this.mcpServers.updateProbe(pending.serverId, {
-          ok: !!evt.ok,
-          tools: evt.tools,
-          error: evt.error,
-        });
-        this.broadcast({ type: "mcp_changed" });
-        pending.resolve(this.mcpServers.publicGet(pending.serverId));
-        return;
-      }
-      default:
-        return;
-    }
-  }
-
-  /** 把 Bot 当前生效的模型配置下发到它的 pi 会话（切换模型只重启该会话） */
+  /** 把 Bot 当前生效的模型配置下发到本机 session */
   pushModelConfig(botId: string) {
     const bot = this.getBot(botId);
-    if (!bot || !this.bridge) return;
+    if (!bot) return;
     const config = this.containerConfigForBot(bot);
     if (!config) return;
-    this.bridge.send({
-      type: "_pibot",
-      cmd: "set_model",
-      botId,
-      config,
-    });
+    const prefix = `${botId}::`;
+    for (const [key, host] of this.hosts) {
+      if (!key.startsWith(prefix)) continue;
+      try {
+        const model = registerPibotModel(host.runtime, config);
+        void host.session.setModel(model);
+        const thinking = isThinkingOverride(bot.thinking_override)
+          ? bot.thinking_override
+          : isThinkingOverride(config.thinking)
+            ? config.thinking
+            : "off";
+        host.session.setThinkingLevel(thinking);
+      } catch (err) {
+        console.warn(`[bots] host setModel ${key}: ${(err as Error).message}`);
+      }
+    }
   }
 
   /** 绑定模型档案到 Bot（传 null 表示跟随默认档案） */
@@ -1090,37 +1092,43 @@ export class BotManager {
     for (const id of this.live.keys()) this.pushModelConfig(id);
   }
 
-  /** 同步账户级 MCP server 配置；桥接只在内容变化时重启 Bot 会话。 */
+  private hostMcpOpts() {
+    return {
+      mcp: this.hostMcp,
+      listMcpServers: () => this.mcpServers.enabledForContainer(this.approvalRules.list()),
+      rememberMcpAllow: (serverId: string, toolName: string) => {
+        this.approvalRules.upsert({ action: "allow" as const, serverId, toolName });
+        this.pushMcpConfig();
+        this.broadcast({ type: "approval_rules_changed" });
+      },
+    };
+  }
+
+  /** 配置变更后丢掉本机 MCP 连接，下次 list/call 用新参数。 */
   pushMcpConfig() {
-    this.bridge?.send({
-      type: "_pibot",
-      cmd: "set_mcp",
-      servers: this.mcpServers.enabledForContainer(this.approvalRules.list()),
-    });
+    this.hostMcp.invalidate();
   }
 
   async testMcp(serverId: string) {
-    await this.ensureComputer();
     const config = this.mcpServers.getContainerConfig(serverId, this.approvalRules.list());
     if (!config) throw new Error("MCP server not found");
-    if (!this.bridge?.connected) throw new Error("Shared computer is not connected");
-
     this.mcpServers.markTesting(serverId);
     this.broadcast({ type: "mcp_changed" });
-    const requestId = randomUUID();
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        this.pendingMcpTests.delete(requestId);
-        this.mcpServers.updateProbe(serverId, {
-          ok: false,
-          error: "Connection test timed out after 60 seconds",
-        });
-        this.broadcast({ type: "mcp_changed" });
-        resolve(this.mcpServers.publicGet(serverId));
-      }, 60_000);
-      this.pendingMcpTests.set(requestId, { serverId, resolve, timer });
-      this.bridge!.send({ type: "_pibot", cmd: "test_mcp", requestId, server: config });
-    });
+    try {
+      const result = await this.hostMcp.test(config);
+      this.mcpServers.updateProbe(serverId, {
+        ok: !!result.ok,
+        tools: result.tools,
+        error: result.ok ? undefined : String(result.error ?? "Connection failed"),
+      });
+    } catch (err) {
+      this.mcpServers.updateProbe(serverId, {
+        ok: false,
+        error: (err as Error).message,
+      });
+    }
+    this.broadcast({ type: "mcp_changed" });
+    return this.mcpServers.publicGet(serverId);
   }
 
   private handleRpcEvent(botId: string, state: LiveBot, evt: any) {
@@ -1128,13 +1136,6 @@ export class BotManager {
       // pi 拒绝了命令（最常见：中转 baseUrl/apiKey 无效导致没有可用模型）。
       // 不提示的话用户只会看到 Bot 沉默，无从判断问题。
       case "response":
-        if (evt.id && this.pendingRpc.has(evt.id)) {
-          const pending = this.pendingRpc.get(evt.id)!;
-          this.pendingRpc.delete(evt.id);
-          clearTimeout(pending.timer);
-          pending.resolve(evt);
-          return;
-        }
         if (evt.success === false) {
           state.streaming = false;
           this.broadcast({ type: "working", botId, working: false, channel: state.channel });
@@ -1373,17 +1374,7 @@ export class BotManager {
     }
   }
 
-  private sendToBot(botId: string, data: Record<string, unknown>) {
-    this.bridge?.send({ botId, data });
-  }
-
   respondApproval(botId: string, requestId: string, value: string | boolean) {
-    let response: Record<string, unknown>;
-    if (typeof value === "boolean") {
-      response = { type: "extension_ui_response", id: requestId, confirmed: value };
-    } else {
-      response = { type: "extension_ui_response", id: requestId, value };
-    }
     const pendingMcp = this.pendingMcpApprovals.get(`${botId}:${requestId}`);
     if (pendingMcp) {
       this.pendingMcpApprovals.delete(`${botId}:${requestId}`);
@@ -1397,7 +1388,11 @@ export class BotManager {
         this.broadcast({ type: "approval_rules_changed" });
       }
     }
-    this.sendToBot(botId, response);
+    const hostPending = this.pendingHostApprovals.get(`${botId}:${requestId}`);
+    if (hostPending) {
+      this.pendingHostApprovals.delete(`${botId}:${requestId}`);
+      hostPending.resolve(typeof value === "boolean" ? (value ? "Approve" : "Reject") : value);
+    }
     this.setAttention(botId, false);
     // 更新已存审批消息为已解决
     const row = db
@@ -1431,20 +1426,33 @@ export class BotManager {
       this.groupTurns.delete(botId);
       this.saveMessage(botId, "user", text, "text", author, meta);
     }
-    if (!state || !this.bridge?.connected) {
-      if (persist) {
-        this.saveMessage(botId, "system", "Bot is offline. Start it to deliver this message.", "system");
+    if (channel === "main" || channel.startsWith("group:")) {
+      if (channel === "main") {
+        if (this.getBot(botId)?.status === "stopped" && !this.hosts.has(hostKey(botId, "main"))) {
+          if (persist) {
+            this.saveMessage(botId, "system", "Bot is offline. Start it to deliver this message.", "system");
+          }
+          return Promise.resolve(false);
+        }
+      } else if (this.getBot(botId)?.status === "stopped") {
+        return Promise.resolve(false);
       }
-      return Promise.resolve(false);
+      const job: PromptJob = { text, author, attachments, persist, channel, sessionName };
+      if (state?.streaming && state.channel !== "unknown" && state.channel !== channel) {
+        return new Promise((resolve) => {
+          if (!this.live.has(botId)) this.live.set(botId, newLive());
+          this.live.get(botId)!.queue.push({ job, resolve });
+        });
+      }
+      if (state?.streaming && channel.startsWith("group:")) {
+        return new Promise((resolve) => {
+          if (!this.live.has(botId)) this.live.set(botId, newLive());
+          this.live.get(botId)!.queue.push({ job, resolve });
+        });
+      }
+      return this.deliverJob(botId, job);
     }
-    const job: PromptJob = { text, author, attachments, persist, channel, sessionName };
-    if (state.streaming && state.channel !== "unknown" && state.channel !== channel) {
-      return new Promise((resolve) => state.queue.push({ job, resolve }));
-    }
-    if (state.streaming && channel.startsWith("group:")) {
-      return new Promise((resolve) => state.queue.push({ job, resolve }));
-    }
-    return this.deliverJob(botId, job);
+    return Promise.resolve(false);
   }
 
   async runGroupMemberTurn(
@@ -1453,8 +1461,9 @@ export class BotManager {
     channel: string,
     sessionName?: string,
   ): Promise<GroupPost[]> {
-    const state = this.live.get(botId);
-    if (!state || !this.bridge?.connected) return [];
+    if (this.getBot(botId)?.status === "stopped") return [];
+    if (!this.live.has(botId)) this.live.set(botId, newLive());
+    const state = this.live.get(botId)!;
     if (state.streaming && state.channel !== channel) {
       // 另一个群的残留回合（常见于刚删群）不要干等到 120s，否则新群会空转到主持人预算耗尽。
       // 私聊 main 仍等待，不误杀。
@@ -1479,8 +1488,8 @@ export class BotManager {
       }
     }
     const live = this.live.get(botId);
-    if (!live || !this.bridge?.connected) {
-      console.warn(`[bots] ${botId} group turn skipped (live=${!!live}, bridge=${!!this.bridge?.connected})`);
+    if (!live) {
+      console.warn(`[bots] ${botId} group turn skipped (no live state)`);
       return [];
     }
     if (live.streaming && live.channel !== channel) {
@@ -1570,16 +1579,39 @@ export class BotManager {
   }
 
   private async deliverJob(botId: string, job: PromptJob): Promise<boolean> {
-    const state = this.live.get(botId);
-    if (!state || !this.bridge?.connected) return false;
-    const switched = await this.ensureChannel(botId, job.channel, job.sessionName);
-    if (!switched) return false;
-    if (job.channel.startsWith("group:")) {
+    if (job.channel === "main" || job.channel.startsWith("group:")) {
+      return this.deliverHostJob(botId, job);
+    }
+    return false;
+  }
+
+  private async deliverHostJob(botId: string, job: PromptJob): Promise<boolean> {
+    const channel = job.channel;
+    try {
+      if (channel === "main") {
+        if (!this.hosts.has(hostKey(botId, "main"))) await this.startHostSession(botId);
+      } else {
+        const overlay = this.groupOverlays.get(hostKey(botId, channel));
+        if (!this.hosts.has(hostKey(botId, channel))) {
+          if (!overlay) return false;
+          await this.ensureGroupHostSession(botId, channel, overlay);
+        }
+      }
+    } catch (err) {
+      console.warn(`[bots] host start ${botId} ${channel}: ${(err as Error).message}`);
+      return false;
+    }
+    if (!this.live.has(botId)) this.live.set(botId, newLive());
+    const hostState = this.live.get(botId)!;
+    hostState.channel = channel;
+    if (channel.startsWith("group:")) {
       this.groupTurns.add(botId);
-      for (const fn of this.groupDeliverListeners) fn(botId, job.channel);
+      for (const fn of this.groupDeliverListeners) fn(botId, channel);
     } else {
       this.groupTurns.delete(botId);
     }
+    const host = this.hosts.get(hostKey(botId, channel));
+    if (!host) return false;
     let prompt = job.text;
     if (job.attachments?.length) {
       const list = job.attachments.map((a) => `- ${a.path} (${a.mime || "file"}, ${a.size} bytes)`).join("\n");
@@ -1596,9 +1628,20 @@ export class BotManager {
     for (const s of referenced) {
       prompt += `\n\n[Skill "/${s.slug}" — ${s.name}]\n${s.content}\n[End of skill. Follow it for this task.]`;
     }
-    const cmd: Record<string, unknown> = { type: "prompt", message: prompt };
-    if (state.streaming) cmd.streamingBehavior = "steer";
-    this.sendToBot(botId, cmd);
+    const streaming = hostState.streaming || host.session.isStreaming;
+    void host.session
+      .prompt(prompt, streaming ? { streamingBehavior: "steer" } : undefined)
+      .catch((err) => {
+        console.warn(`[bots] host prompt ${botId} ${channel}: ${(err as Error).message}`);
+        if (channel === "main") {
+          this.saveMessage(botId, "system", `Model call failed: ${(err as Error).message}`, "system");
+        }
+        hostState.streaming = false;
+        this.broadcast({ type: "working", botId, working: false, channel });
+        this.notifyIdle(hostState);
+        this.finishGroupMemberTurn(botId, hostState, true);
+        this.flushPromptQueue(botId);
+      });
     return true;
   }
 
@@ -1635,15 +1678,19 @@ export class BotManager {
   }
 
   abort(botId: string, onlyChannel?: string) {
+    const state = this.live.get(botId);
     if (onlyChannel) {
-      this.dropQueueForChannel(botId, onlyChannel);
-      const state = this.live.get(botId);
-      if (state?.channel === onlyChannel && (state.streaming || this.groupTurns.has(botId))) {
-        this.sendToBot(botId, { type: "abort" });
+      const host = this.hosts.get(hostKey(botId, onlyChannel));
+      if (host && (state?.channel === onlyChannel || host.session.isStreaming)) {
+        void host.session.abort();
       }
+      this.dropQueueForChannel(botId, onlyChannel);
       return;
     }
-    this.sendToBot(botId, { type: "abort" });
+    const prefix = `${botId}::`;
+    for (const [key, host] of this.hosts) {
+      if (key.startsWith(prefix)) void host.session.abort();
+    }
   }
 
   // ---------- helpers ----------
@@ -1674,23 +1721,41 @@ export class BotManager {
 
   // ---------- 启动与迁移 ----------
 
-  /** 服务启动：迁移旧架构 → 拉起共享电脑 → 恢复 Bot 会话 */
+  /** 服务启动：迁移旧架构 → 拉起本机脑子 → 电脑若已在跑则标 online */
   async startup() {
     const memories = await this.migrateLegacyBots();
-    if (this.listBots().length > 0) {
-      await this.ensureComputer();
-      // 把迁移出来的记忆文件写进新电脑（在 start_bot 生成模板之前写，桥接会保留已有文件）
-      if (memories.size > 0) {
-        const cid = await this.requireComputer();
+    if (memories.size > 0) {
+      try {
+        const cid = await this.computerAccess.assertOnline();
         for (const [botId, content] of memories) {
           try {
             await this.docker.writeFile(cid, memoryPath(botId), content);
+            this.writeMemoryCache(botId, content.toString("utf8"));
             console.log(`[migrate] restored memory for bot ${botId}`);
           } catch (err) {
             console.warn(`[migrate] failed to restore memory for ${botId}: ${(err as Error).message}`);
           }
         }
+      } catch {
+        for (const [botId, content] of memories) {
+          this.writeMemoryCache(botId, content.toString("utf8"));
+        }
       }
+    }
+    for (const bot of this.listBots()) {
+      if (bot.status === "stopped") continue;
+      void this.startHostSession(bot.id).catch((err) => {
+        console.warn(`[bots] host start ${bot.id} failed: ${(err as Error).message}`);
+        this.setStatus(bot.id, "error");
+      });
+    }
+    try {
+      const info = await this.docker.inspectComputer();
+      if (info?.running) {
+        this.markComputerOnline(info.containerId, info.vncPort);
+      }
+    } catch (err) {
+      console.warn(`[bots] inspect computer: ${(err as Error).message}`);
     }
   }
 

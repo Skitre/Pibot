@@ -360,6 +360,7 @@ export function buildGroupMemberSystemPrompt(
     "Speak only as yourself. Do not role-play other members or the user.",
     "When there is work to do, use your usual tools first, then report with send_message.",
     "To post in this room, call the send_message tool. Raw assistant text is a private draft and is not shown unless you never call any tool.",
+    "If a computer tool says the computer is offline, send_message that the computer is offline. You are still available to talk. Do not say you are offline.",
     "If you were asked to speak and you have something to say — even a short reply to the user — send_message with that text. Set pass=true only when you truly have nothing to add; the text is then ignored and never shown.",
     "If the user just wrote to the group and did not @ anyone, answer them. Do not all pass and leave the user hanging.",
     "Reply in the same language the user is using.",
@@ -376,13 +377,26 @@ export function buildGroupMemberSystemPrompt(
   ].join("\n");
 }
 
+const GROUP_TURN_INSTRUCTION =
+  "If you have something to say, send_message in the user's language — short, a reaction to what was just said, no recap. Write @Name to pull a teammate in. Set pass=true only when you have nothing to add. Set next to a teammate who should continue. Set ask_user=true only for a consequential/undo-hard action, true ambiguity you cannot look up, or something only the user knows — otherwise decide, proceed, and mention the assumption. Set done=true when nothing useful remains.";
+
+export function buildGroupFirstTurnPrompt(botName: string, groupName: string, history: ChatLine[]): string {
+  return [
+    `[Group thread "${groupName}"] You are ${botName}. Group transcript so far:`,
+    "",
+    formatChatLines(lastMessages(history, GROUP_HISTORY_WINDOW)),
+    "",
+    GROUP_TURN_INSTRUCTION,
+  ].join("\n");
+}
+
 export function buildGroupTurnPrompt(botName: string, groupName: string, newLines: ChatLine[]): string {
   return [
     `[Group thread "${groupName}"] You are ${botName}. New messages since you last spoke:`,
     "",
     formatChatLines(newLines),
     "",
-    "If you have something to say, send_message in the user's language — short, a reaction to what was just said, no recap. Write @Name to pull a teammate in. Set pass=true only when you have nothing to add. Set next to a teammate who should continue. Set ask_user=true only for a consequential/undo-hard action, true ambiguity you cannot look up, or something only the user knows — otherwise decide, proceed, and mention the assumption. Set done=true when nothing useful remains.",
+    GROUP_TURN_INSTRUCTION,
   ].join("\n");
 }
 
@@ -400,6 +414,6 @@ export function buildGroupSeedPrompt(
     "Group transcript so far:",
     formatChatLines(lastMessages(history, GROUP_HISTORY_WINDOW)),
     "",
-    "If you have something to say, send_message in the user's language — short, a reaction to what was just said, no recap. Write @Name to pull a teammate in. Set pass=true only when you have nothing to add. Set next to a teammate who should continue. Set ask_user=true only for a consequential/undo-hard action, true ambiguity you cannot look up, or something only the user knows — otherwise decide, proceed, and mention the assumption. Set done=true when nothing useful remains.",
+    GROUP_TURN_INSTRUCTION,
   ].join("\n");
 }

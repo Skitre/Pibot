@@ -45,7 +45,7 @@ function extractTarFile(tar: Buffer): Buffer | null {
   return null;
 }
 
-// 共享电脑：整个账户一台容器，所有 Bot 的 pi 进程都跑在里面（对齐官方架构）
+// 共享电脑：整个账户一台容器。脑子在本机，这里只跑桌面 / 浏览器 / 文件。
 const COMPUTER_NAME = "pibot-computer-shared";
 const COMPUTER_VOLUME = "pibot-computer-data";
 
@@ -80,25 +80,20 @@ export class DockerManager {
       Image: this.cfg.docker.image,
       name: COMPUTER_NAME,
       Env: [
-        `PIBOT_BRIDGE_PORT=8791`,
         `PIBOT_WORKSPACE=/config/workspace`,
-        `PUID=1000`,
-        `PGID=1000`,
         `TZ=Asia/Shanghai`,
-        `TITLE=Pibot Computer`,
       ],
       Labels: { "pibot.computer": "1" },
       HostConfig: {
         Binds: [`${COMPUTER_VOLUME}:/config`],
         PortBindings: {
           "3000/tcp": [{ HostPort: String(vncPort) }],
-          "8791/tcp": [{ HostPort: String(bridgePort) }],
         },
         ShmSize: this.cfg.docker.shmSize,
         SecurityOpt: ["seccomp=unconfined"],
         RestartPolicy: { Name: "unless-stopped" },
       },
-      ExposedPorts: { "3000/tcp": {}, "8791/tcp": {} },
+      ExposedPorts: { "3000/tcp": {} },
     });
 
     await container.start();
@@ -175,15 +170,36 @@ export class DockerManager {
   // ---------- 容器内文件读写（附件上传、AGENTS.md 记忆等） ----------
 
   /** 在容器里执行命令，可选地经 stdin 喂数据，返回退出码与输出 */
-  private async exec(
+  /** 看共享电脑在不在，不 start。 */
+  async inspectComputer(): Promise<{
+    containerId: string;
+    running: boolean;
+    vncPort: number;
+    bridgePort: number;
+  } | null> {
+    const existing = await docker.listContainers({
+      all: true,
+      filters: { name: [COMPUTER_NAME] },
+    });
+    if (existing.length === 0) return null;
+    return {
+      containerId: existing[0].Id,
+      running: existing[0].State === "running",
+      vncPort: this.cfg.docker.vncBasePort,
+      bridgePort: this.cfg.docker.bridgeBasePort,
+    };
+  }
+
+  async exec(
     containerId: string,
     cmd: string[],
-    opts: { input?: Buffer; env?: string[] } = {},
+    opts: { input?: Buffer; env?: string[]; cwd?: string } = {},
   ): Promise<{ exitCode: number; stdout: Buffer; stderr: string }> {
     const container = docker.getContainer(containerId);
     const exec = await container.exec({
       Cmd: cmd,
       Env: opts.env,
+      WorkingDir: opts.cwd,
       AttachStdin: !!opts.input,
       AttachStdout: true,
       AttachStderr: true,
