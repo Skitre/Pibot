@@ -2,7 +2,7 @@
   "name": "pibot",
   "private": true,
   "version": "0.1.0",
-  "description": "Local single-user Grok Bot replica built on pi-sdk + Docker",
+  "description": "Local-first multi-bot AI workspace with host-side pi-sdk agents and one shared Docker desktop",
   "workspaces": [
     "server",
     "web"

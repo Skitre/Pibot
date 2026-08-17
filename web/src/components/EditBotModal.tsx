@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
 import type { Bot, BotSkill, ThinkingLevel } from "../types";
-import { THINKING_LEVELS } from "../types";
+import { clampThinkingLevel, supportedThinkingLevels } from "../types";
 import { api, apiErrorMessage } from "../api";
 import { store, useStore } from "../store";
 import { assignMark, isMarkShape, type MarkShape } from "../mark/assign";
 import { AvatarPicker } from "./AvatarPicker";
 import { BotAvatar } from "./BotAvatar";
 import { CloseIcon } from "./icons";
-import { useT } from "../i18n";
+import { translateThinkingLevel, useT } from "../i18n";
 
 interface Props {
   bot: Bot;
@@ -61,7 +61,19 @@ export function EditBotModal({ bot, onClose }: Props) {
   const selectedProfile = modelProfileId
     ? (profiles.find((p) => p.id === modelProfileId) ?? defaultProfile)
     : defaultProfile;
-  const effectiveThinking = thinkingOverride ?? selectedProfile?.thinking ?? "off";
+  const reasoning = selectedProfile?.reasoning === 1;
+  const thinkingLevelMap = selectedProfile?.thinking_level_map ?? "{}";
+  const thinkingLevels = supportedThinkingLevels(reasoning, thinkingLevelMap);
+  const profileThinking = clampThinkingLevel(
+    reasoning,
+    thinkingLevelMap,
+    selectedProfile?.thinking ?? "off",
+  );
+  const effectiveThinking = clampThinkingLevel(
+    reasoning,
+    thinkingLevelMap,
+    thinkingOverride ?? profileThinking,
+  );
 
   const toggleSkill = (id: string) => {
     setEnabledIds((prev) => {
@@ -87,7 +99,9 @@ export function EditBotModal({ bot, onClose }: Props) {
       });
       await api.updateBotSettings(bot.id, {
         modelProfileId,
-        thinkingOverride,
+        thinkingOverride: thinkingOverride
+          ? clampThinkingLevel(reasoning, thinkingLevelMap, thinkingOverride)
+          : null,
         skillIds: [...enabledIds],
       });
       store.notifyBotSkillsChanged();
@@ -130,7 +144,18 @@ export function EditBotModal({ bot, onClose }: Props) {
         <select
           style={input}
           value={modelProfileId ?? ""}
-          onChange={(e) => setModelProfileId(e.target.value || null)}
+          onChange={(e) => {
+            const nextId = e.target.value || null;
+            const nextProfile = nextId
+              ? (profiles.find((p) => p.id === nextId) ?? defaultProfile)
+              : defaultProfile;
+            setModelProfileId(nextId);
+            setThinkingOverride((current) =>
+              current && nextProfile?.reasoning === 1
+                ? clampThinkingLevel(true, nextProfile.thinking_level_map, current)
+                : null,
+            );
+          }}
         >
           <option value="">
             {tr("editBot.followGlobal")}
@@ -147,17 +172,18 @@ export function EditBotModal({ bot, onClose }: Props) {
         <select
           style={input}
           value={thinkingOverride ?? ""}
+          disabled={!reasoning}
           onChange={(e) =>
             setThinkingOverride((e.target.value || null) as ThinkingLevel | null)
           }
         >
           <option value="">
             {tr("editBot.followModel")}
-            {selectedProfile ? ` (${selectedProfile.thinking})` : ""}
+            {selectedProfile ? ` (${translateThinkingLevel(profileThinking, tr)})` : ""}
           </option>
-          {THINKING_LEVELS.map((level) => (
+          {thinkingLevels.map((level) => (
             <option key={level} value={level}>
-              {level}
+              {translateThinkingLevel(level, tr)}
             </option>
           ))}
         </select>
@@ -165,7 +191,7 @@ export function EditBotModal({ bot, onClose }: Props) {
           {selectedProfile
             ? tr("editBot.effective", {
                 model: selectedProfile.model_name,
-                thinking: effectiveThinking,
+                thinking: translateThinkingLevel(effectiveThinking, tr),
               })
             : tr("editBot.effectiveNone")}
         </div>

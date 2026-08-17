@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR } from "./config.js";
+import { DEFAULT_THINKING_LEVEL_MAP_JSON } from "./thinking.js";
 
 mkdirSync(DATA_DIR, { recursive: true });
 const db = new Database(join(DATA_DIR, "pibot.db"));
@@ -91,6 +92,7 @@ CREATE TABLE IF NOT EXISTS model_profiles (
   model_name TEXT NOT NULL,
   reasoning INTEGER NOT NULL DEFAULT 0,
   thinking TEXT NOT NULL DEFAULT 'off',
+  thinking_level_map TEXT NOT NULL DEFAULT '${DEFAULT_THINKING_LEVEL_MAP_JSON}',
   context_window INTEGER NOT NULL DEFAULT 200000,
   max_tokens INTEGER NOT NULL DEFAULT 65536,
   is_default INTEGER NOT NULL DEFAULT 0,
@@ -122,7 +124,7 @@ CREATE TABLE IF NOT EXISTS bot_skills (
   PRIMARY KEY (bot_id, skill_id)
 );
 
--- MCP servers：账户级配置，所有 Bot 共用；stdio 进程运行在共享电脑容器内。
+-- MCP servers：账户级配置，所有 Bot 共用；HTTP/stdio 客户端均运行在宿主服务侧。
 CREATE TABLE IF NOT EXISTS mcp_servers (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -151,7 +153,7 @@ CREATE TABLE IF NOT EXISTS approval_rules (
   UNIQUE(server_id, tool_name)
 );
 
--- Bot workspace 下的 pi session：main=私聊，group:<id>=该 Bot 在某个群的会话
+-- 宿主 pi session 索引：main=私聊，group:<id>=该 Bot 在某个群的独立会话
 CREATE TABLE IF NOT EXISTS bot_sessions (
   bot_id TEXT NOT NULL,
   channel TEXT NOT NULL,
@@ -179,6 +181,22 @@ if (!profCols.some((c) => c.name === "vision")) {
 }
 if (!profCols.some((c) => c.name === "vision_profile_id")) {
   db.exec("ALTER TABLE model_profiles ADD COLUMN vision_profile_id TEXT");
+}
+if (!profCols.some((c) => c.name === "thinking_level_map")) {
+  db.exec(
+    `ALTER TABLE model_profiles ADD COLUMN thinking_level_map TEXT NOT NULL DEFAULT '${DEFAULT_THINKING_LEVEL_MAP_JSON}'`,
+  );
+}
+
+// 一次性把旧版新增该列时写入的空映射升级成可直接编辑的同名模板。
+const thinkingMapMigration = db
+  .prepare("SELECT value FROM app_settings WHERE key = 'thinking_level_map_identity_v1'")
+  .get() as { value: string } | undefined;
+if (!thinkingMapMigration) {
+  db.prepare(
+    "UPDATE model_profiles SET thinking_level_map = ? WHERE thinking_level_map IS NULL OR TRIM(thinking_level_map) IN ('', '{}')",
+  ).run(DEFAULT_THINKING_LEVEL_MAP_JSON);
+  db.prepare("INSERT INTO app_settings (key, value) VALUES ('thinking_level_map_identity_v1', '1')").run();
 }
 
 // 迁移：早期 MCP 表补状态、工具配置和默认审批策略。
@@ -263,6 +281,7 @@ export interface ModelProfileRow {
   vision: number;
   vision_profile_id: string | null;
   thinking: string;
+  thinking_level_map: string;
   context_window: number;
   max_tokens: number;
   is_default: number;

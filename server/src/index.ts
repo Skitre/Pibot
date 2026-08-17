@@ -12,6 +12,7 @@ import { BotLookError, BotManager, BotSettingsError, parseBotLook } from "./bot-
 import { RoutineScheduler } from "./routines.js";
 import { GroupManager, GroupError, type GroupModeratorInput } from "./groups.js";
 import { ModelProfileStore, type ProfileInput } from "./model-profiles.js";
+import { ThinkingLevelMapError } from "./thinking.js";
 import { SkillStore, type SkillInput } from "./skills.js";
 import { McpServerStore, type McpServerInput } from "./mcp-servers.js";
 import { ApprovalRuleStore, type ApprovalRuleInput } from "./approval-rules.js";
@@ -298,18 +299,32 @@ app.put("/api/groups/:gid/moderator", async (req, reply) => {
 
 app.get("/api/models", async () => ({ profiles: profiles.list() }));
 
-app.post("/api/models", async (req) => {
-  const profile = profiles.create(req.body as ProfileInput);
-  bots.pushModelConfigToAll();
-  return { profile };
+app.post("/api/models", async (req, reply) => {
+  try {
+    const profile = profiles.create(req.body as ProfileInput);
+    bots.pushModelConfigToAll();
+    return { profile };
+  } catch (err) {
+    if (err instanceof ThinkingLevelMapError) {
+      return reply.code(err.statusCode).send({ error: err.message });
+    }
+    throw err;
+  }
 });
 
 app.put("/api/models/:pid", async (req, reply) => {
   const { pid } = req.params as { pid: string };
-  const profile = profiles.update(pid, req.body as ProfileInput);
-  if (!profile) return reply.code(404).send({ error: "profile not found" });
-  bots.pushModelConfigToAll();
-  return { profile };
+  try {
+    const profile = profiles.update(pid, req.body as ProfileInput);
+    if (!profile) return reply.code(404).send({ error: "profile not found" });
+    bots.pushModelConfigToAll();
+    return { profile };
+  } catch (err) {
+    if (err instanceof ThinkingLevelMapError) {
+      return reply.code(err.statusCode).send({ error: err.message });
+    }
+    throw err;
+  }
 });
 
 app.post("/api/models/:pid/default", async (req) => {

@@ -1,4 +1,5 @@
 import { prefs, usePrefs, type Locale } from "./prefs";
+import type { ThinkingLevel } from "./types";
 
 type Vars = Record<string, string | number>;
 
@@ -295,8 +296,11 @@ const zh = {
   "models.context": "上下文窗口",
   "models.maxTokens": "最大输出 tokens",
   "models.reasoning": "支持思考/推理",
-  "models.reasoningCheck": "该模型支持 extended thinking",
+  "models.reasoningCheck": "该模型接受思考强度参数",
   "models.thinking": "思考强度",
+  "models.thinkingMap": "思考档位映射（JSON）",
+  "models.thinkingMapHint": "默认七档与同名接口值一一对应。可改成模型或中转实际接受的值；删除键会使用接口默认，null 表示不支持。",
+  "models.thinkingMapInvalid": "思考档位映射无效：{error}",
   "models.vision": "视觉能力",
   "models.visionHint": "关闭后浏览器工具改回传文字快照；截图类工具会自动找一个有视觉的配置当「眼睛」转述画面",
   "models.visionCheck": "该模型支持图片输入（视觉）",
@@ -312,7 +316,8 @@ const zh = {
   "think.low": "低",
   "think.medium": "中",
   "think.high": "高",
-  "think.xhigh": "最高",
+  "think.xhigh": "超高",
+  "think.max": "最高",
 
   "mcp.title": "MCP 服务器",
   "mcp.hint": "MCP 跑在本机，所有 Bot 共用，关电脑也能用。支持本地 stdio 包和远程 Streamable HTTP（兼容旧 SSE）。文本模型收到 MCP 图片时会自动交给视觉辅助模型转述。",
@@ -424,7 +429,7 @@ const zh = {
   "general.notifyDesc": "Bot 需要审批或完成任务时，如果你不在看这个页面就发系统通知",
 
   "about.title": "关于",
-  "about.hint": "Pibot — 本机单用户版 Grok Bot 复刻。所有 Bot 共享一台 Docker 电脑，Bot 会话相互独立，大脑层基于 pi-sdk。",
+  "about.hint": "Pibot — 本地优先的多 Bot AI 工作台。pi-sdk Agent 直接运行在宿主服务中；Docker 只提供所有 Bot 共享的可见电脑、浏览器和文件。",
   "about.bots": "Bot 数量",
   "about.models": "模型配置",
   "about.image": "容器镜像",
@@ -732,8 +737,11 @@ const en: Record<keyof typeof zh, string> = {
   "models.context": "Context window",
   "models.maxTokens": "Max output tokens",
   "models.reasoning": "Reasoning / thinking",
-  "models.reasoningCheck": "This model supports extended thinking",
+  "models.reasoningCheck": "This model accepts a configurable reasoning effort",
   "models.thinking": "Thinking level",
+  "models.thinkingMap": "Thinking level map (JSON)",
+  "models.thinkingMapHint": "All seven levels map to same-name API values by default. Change values for the model or relay; missing keys use API defaults and null disables a level.",
+  "models.thinkingMapInvalid": "Invalid thinking level map: {error}",
   "models.vision": "Vision",
   "models.visionHint": "When off, browser tools return text snapshots; screenshot tools ask a vision-capable profile to describe the image",
   "models.visionCheck": "This model accepts image input (vision)",
@@ -744,12 +752,13 @@ const en: Record<keyof typeof zh, string> = {
   "models.save": "Save",
   "models.saving": "Saving…",
   "models.cancel": "Cancel",
-  "think.off": "off",
-  "think.minimal": "minimal",
-  "think.low": "low",
-  "think.medium": "medium",
-  "think.high": "high",
-  "think.xhigh": "xhigh",
+  "think.off": "Off",
+  "think.minimal": "Minimal",
+  "think.low": "Low",
+  "think.medium": "Medium",
+  "think.high": "High",
+  "think.xhigh": "Extra high",
+  "think.max": "Maximum",
 
   "mcp.title": "MCP Servers",
   "mcp.hint": "MCP runs on this machine and is available to every Bot, even when the computer is off. Supports local stdio packages and remote Streamable HTTP (with SSE fallback). Images from MCP are described by the vision helper for text-only models.",
@@ -861,7 +870,7 @@ const en: Record<keyof typeof zh, string> = {
   "general.notifyDesc": "Notify you when a Bot needs approval or finishes a task and this page isn't focused",
 
   "about.title": "About",
-  "about.hint": "Pibot — a local single-user Grok Bot replica. All Bots share one Docker computer, sessions stay independent, and the brain is pi-sdk.",
+  "about.hint": "Pibot — a local-first multi-bot AI workspace. pi-sdk agents run directly in the host service; Docker only provides the visible computer, browser, and files shared by every Bot.",
   "about.bots": "Bots",
   "about.models": "Model configs",
   "about.image": "Container image",
@@ -894,6 +903,20 @@ export type TFn = (key: MessageKey, vars?: Vars) => string;
 export function useT(): TFn {
   const { locale } = usePrefs();
   return (key, vars) => t(key, vars, locale);
+}
+
+const THINKING_KEYS: Record<ThinkingLevel, MessageKey> = {
+  off: "think.off",
+  minimal: "think.minimal",
+  low: "think.low",
+  medium: "think.medium",
+  high: "think.high",
+  xhigh: "think.xhigh",
+  max: "think.max",
+};
+
+export function translateThinkingLevel(level: ThinkingLevel, tr: TFn = t): string {
+  return tr(THINKING_KEYS[level]);
 }
 
 const TOOL_KEYS: Record<string, MessageKey> = {

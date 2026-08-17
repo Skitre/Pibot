@@ -3,6 +3,7 @@ import db, { BotRow } from "./db.js";
 import { BotManager, type Attachment } from "./bot-manager.js";
 import { ModelProfileStore } from "./model-profiles.js";
 import { moderate } from "./moderator.js";
+import { clampThinkingLevel, isThinkingLevel, safeThinkingLevelMap } from "./thinking.js";
 import {
   GROUP_HISTORY_WINDOW,
   GROUP_MAX_MEMBERS,
@@ -58,7 +59,7 @@ export interface GroupModeratorInput {
   maxTokens?: number;
   /** 0 表示继承 GROUP_HISTORY_WINDOW */
   history?: number;
-  /** 空表示不发送思考参数 */
+  /** 空表示继承所选模型档案 */
   thinking?: string;
 }
 
@@ -99,8 +100,8 @@ function previewLine(text: string): string {
 }
 
 // 群是独立线程：UI 落 group_messages。房间没有自己的 runner；
-// 编排器按轮次串行驱动成员。每个成员 Bot 在 workspace 里另开
-// 一条 pi session（group:<id>），与私聊 main 用 switch_session 切换。
+// 编排器按轮次串行驱动成员。每个成员 Bot 在宿主侧另开
+// 一条 pi session（group:<id>），与私聊 main 会话相互隔离。
 export class GroupManager {
   constructor(
     private bots: BotManager,
@@ -285,7 +286,19 @@ export class GroupManager {
     if (profileId === "") profileId = null;
     const maxTokens = clampNonNegative(input.maxTokens ?? group.moderator_max_tokens);
     const history = clampNonNegative(input.history ?? group.moderator_history);
-    const thinking = (input.thinking ?? group.moderator_thinking ?? "").trim();
+    const requestedThinking = (input.thinking ?? group.moderator_thinking ?? "").trim();
+    if (requestedThinking && !isThinkingLevel(requestedThinking)) {
+      throw new GroupError(400, "invalid moderator thinking level");
+    }
+    const profile = (profileId ? this.profiles.get(profileId) : undefined) ?? this.profiles.getDefault();
+    const thinking =
+      requestedThinking && profile
+        ? clampThinkingLevel(
+            profile.reasoning === 1,
+            safeThinkingLevelMap(profile.thinking_level_map),
+            requestedThinking,
+          )
+        : requestedThinking;
     db.prepare(
       `UPDATE groups SET moderator_name = ?, moderator_profile_id = ?, moderator_instructions = ?,
        moderator_max_tokens = ?, moderator_history = ?, moderator_thinking = ? WHERE id = ?`,

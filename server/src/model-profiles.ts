@@ -1,6 +1,14 @@
 import { randomUUID } from "node:crypto";
 import db, { ModelProfileRow } from "./db.js";
 import { AppConfig } from "./config.js";
+import {
+  DEFAULT_THINKING_LEVEL_MAP_JSON,
+  clampThinkingLevel,
+  parseThinkingLevelMap,
+  safeThinkingLevelMap,
+  type ThinkingLevel,
+  type ThinkingLevelMap,
+} from "./thinking.js";
 
 export interface ProfileInput {
   name: string;
@@ -13,6 +21,7 @@ export interface ProfileInput {
   vision?: boolean;
   visionProfileId?: string | null;
   thinking?: string;
+  thinkingLevelMap?: string;
   contextWindow?: number;
   maxTokens?: number;
 }
@@ -25,7 +34,7 @@ export interface VisionHelperConfig {
   modelId: string;
 }
 
-// 容器内 pi 需要的模型配置（写入 bot 目录 pibot-model.json）
+// 宿主 pi-sdk AgentSession 使用的模型配置。
 export interface ContainerModelConfig {
   baseUrl: string;
   apiKey: string;
@@ -34,31 +43,23 @@ export interface ContainerModelConfig {
   modelName: string;
   reasoning: boolean;
   vision: boolean;
-  thinking: string;
+  thinking: ThinkingLevel;
+  thinkingLevelMap: ThinkingLevelMap;
   contextWindow: number;
   maxTokens: number;
   visionHelper?: VisionHelperConfig;
 }
 
-/** 思考强度档位映射成各家接口认的值。off / 空 / 认不出的一律返回 null，表示不发送。 */
-function reasoningEffort(level?: string): "low" | "medium" | "high" | null {
-  switch ((level ?? "").trim().toLowerCase()) {
-    case "minimal":
-    case "low":
-      return "low";
-    case "medium":
-      return "medium";
-    case "high":
-    case "xhigh":
-      return "high";
-    default:
-      return null;
-  }
+/** 思考档位先经模型自定义映射，再交给支持 effort 字符串的接口。 */
+function reasoningEffort(p: ModelProfileRow, level: ThinkingLevel): string | null {
+  if (level === "off") return null;
+  const mapped = safeThinkingLevelMap(p.thinking_level_map)[level];
+  return typeof mapped === "string" ? mapped : level;
 }
 
 /** Anthropic 要的是思考预算而不是档位，且必须小于 max_tokens。 */
-function thinkingBudget(effort: "low" | "medium" | "high", maxTokens: number): number {
-  const wanted = effort === "low" ? 2048 : effort === "medium" ? 8192 : 16384;
+function thinkingBudget(level: ThinkingLevel, maxTokens: number): number {
+  const wanted = level === "minimal" ? 1024 : level === "low" ? 2048 : level === "medium" ? 8192 : 16384;
   return Math.max(1024, Math.min(wanted, maxTokens - 1024));
 }
 
@@ -105,11 +106,16 @@ export class ModelProfileStore {
     const id = randomUUID().slice(0, 8);
     const isFirst =
       (db.prepare("SELECT COUNT(*) AS n FROM model_profiles").get() as { n: number }).n === 0;
+    const reasoning = input.reasoning === true;
+    const thinkingLevelMap = parseThinkingLevelMap(
+      input.thinkingLevelMap ?? DEFAULT_THINKING_LEVEL_MAP_JSON,
+    );
+    const thinking = clampThinkingLevel(reasoning, thinkingLevelMap, input.thinking);
     db.prepare(
       `INSERT INTO model_profiles
        (id, name, base_url, api_key, api, model_id, model_name, reasoning, vision,
-        vision_profile_id, thinking, context_window, max_tokens, is_default, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        vision_profile_id, thinking, thinking_level_map, context_window, max_tokens, is_default, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     ).run(
       id,
       input.name,
@@ -118,10 +124,11 @@ export class ModelProfileStore {
       input.api,
       input.modelId,
       input.modelName || input.modelId,
-      input.reasoning ? 1 : 0,
+      reasoning ? 1 : 0,
       input.vision === false ? 0 : 1,
       input.visionProfileId ?? null,
-      input.thinking ?? "off",
+      thinking,
+      JSON.stringify(thinkingLevelMap),
       input.contextWindow ?? 200000,
       input.maxTokens ?? 8192,
       isFirst ? 1 : 0,
@@ -132,9 +139,14 @@ export class ModelProfileStore {
 
   update(id: string, input: ProfileInput): ModelProfileRow | undefined {
     if (!this.get(id)) return undefined;
+    const reasoning = input.reasoning === true;
+    const thinkingLevelMap = parseThinkingLevelMap(
+      input.thinkingLevelMap ?? DEFAULT_THINKING_LEVEL_MAP_JSON,
+    );
+    const thinking = clampThinkingLevel(reasoning, thinkingLevelMap, input.thinking);
     db.prepare(
       `UPDATE model_profiles SET name=?, base_url=?, api_key=?, api=?, model_id=?, model_name=?,
-       reasoning=?, vision=?, vision_profile_id=?, thinking=?, context_window=?, max_tokens=? WHERE id=?`,
+       reasoning=?, vision=?, vision_profile_id=?, thinking=?, thinking_level_map=?, context_window=?, max_tokens=? WHERE id=?`,
     ).run(
       input.name,
       input.baseUrl,
@@ -142,10 +154,11 @@ export class ModelProfileStore {
       input.api,
       input.modelId,
       input.modelName || input.modelId,
-      input.reasoning ? 1 : 0,
+      reasoning ? 1 : 0,
       input.vision === false ? 0 : 1,
       input.visionProfileId ?? null,
-      input.thinking ?? "off",
+      thinking,
+      JSON.stringify(thinkingLevelMap),
       input.contextWindow ?? 200000,
       input.maxTokens ?? 8192,
       id,
@@ -173,6 +186,7 @@ export class ModelProfileStore {
   }
 
   toContainerConfig(p: ModelProfileRow): ContainerModelConfig {
+    const thinkingLevelMap = safeThinkingLevelMap(p.thinking_level_map);
     const config: ContainerModelConfig = {
       baseUrl: p.base_url,
       apiKey: p.api_key,
@@ -181,7 +195,8 @@ export class ModelProfileStore {
       modelName: p.model_name,
       reasoning: p.reasoning === 1,
       vision: p.vision === 1,
-      thinking: p.thinking,
+      thinking: clampThinkingLevel(p.reasoning === 1, thinkingLevelMap, p.thinking),
+      thinkingLevelMap,
       contextWindow: p.context_window,
       maxTokens: p.max_tokens,
     };
@@ -266,8 +281,12 @@ export class ModelProfileStore {
     // 回复在推理阶段就被 finish=length 截断，content 直接为空。
     const maxTokens = opts?.maxTokens ?? p.max_tokens ?? 8192;
     const timeoutMs = opts?.timeoutMs ?? 20_000;
-    // 留空就完全不发思考参数：中转不认这些字段时会整条 400，宁可保持端点默认行为。
-    const effort = reasoningEffort(opts?.thinking);
+    // 调用方留空时不发送；有值则先按模型映射和支持范围归一化。
+    const thinkingLevelMap = safeThinkingLevelMap(p.thinking_level_map);
+    const thinking = opts?.thinking
+      ? clampThinkingLevel(p.reasoning === 1, thinkingLevelMap, opts.thinking)
+      : "off";
+    const effort = reasoningEffort(p, thinking);
     try {
       if (p.api === "anthropic-messages") {
         const system = messages
@@ -286,8 +305,8 @@ export class ModelProfileStore {
             model: p.model_id,
             max_tokens: maxTokens,
             ...(system ? { system } : {}),
-            ...(effort
-              ? { thinking: { type: "enabled", budget_tokens: thinkingBudget(effort, maxTokens) } }
+            ...(thinking !== "off"
+              ? { thinking: { type: "enabled", budget_tokens: thinkingBudget(thinking, maxTokens) } }
               : {}),
             messages: rest.map((message) => ({ role: message.role, content: message.content })),
           }),

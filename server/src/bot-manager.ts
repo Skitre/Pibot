@@ -37,6 +37,12 @@ import {
   resolveWorkspacePath,
   toolWritePath,
 } from "./workspace-files.js";
+import {
+  THINKING_LEVELS,
+  clampThinkingLevel,
+  isThinkingLevel,
+  type ThinkingLevel,
+} from "./thinking.js";
 
 type Broadcast = (msg: Record<string, unknown>) => void;
 
@@ -103,8 +109,8 @@ export interface ComputerState {
   vncPort: number;
 }
 
-export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
-export type ThinkingOverride = (typeof THINKING_LEVELS)[number];
+export { THINKING_LEVELS };
+export type ThinkingOverride = ThinkingLevel;
 
 export interface BotSettings {
   bot: BotRow;
@@ -129,7 +135,7 @@ export class BotSettingsError extends Error {
 }
 
 function isThinkingOverride(value: unknown): value is ThinkingOverride {
-  return typeof value === "string" && (THINKING_LEVELS as readonly string[]).includes(value);
+  return isThinkingLevel(value);
 }
 
 interface LiveBot {
@@ -344,17 +350,12 @@ export class BotManager {
     if (!model) return;
     if (!this.live.has(botId)) this.live.set(botId, newLive());
     const agentsMd = await this.loadAgentsMd(bot);
-    const thinking = isThinkingOverride(bot.thinking_override)
-      ? bot.thinking_override
-      : isThinkingOverride(model.thinking)
-        ? model.thinking
-        : "off";
     const main = this.hosts.get(hostKey(botId, "main"));
     const host = await createHostSession({
       bot,
       agentsMd,
       model,
-      thinking,
+      thinking: model.thinking,
       computer: this.computerAccess,
       channel,
       systemExtra: overlay,
@@ -403,10 +404,15 @@ export class BotManager {
   getBotSettings(id: string): BotSettings {
     const bot = this.getBot(id);
     if (!bot) throw new BotSettingsError(404, "bot not found");
+    const config = this.containerConfigForBot(bot);
+    const override = isThinkingOverride(bot.thinking_override) ? bot.thinking_override : null;
     return {
       bot,
       modelProfileId: bot.model_profile_id,
-      thinkingOverride: isThinkingOverride(bot.thinking_override) ? bot.thinking_override : null,
+      thinkingOverride:
+        override && config
+          ? clampThinkingLevel(config.reasoning, config.thinkingLevelMap, override)
+          : override,
       skills: this.skills.listForBot(id),
     };
   }
@@ -425,7 +431,10 @@ export class BotManager {
       throw new BotSettingsError(400, "modelProfileId must be a string or null");
     }
     if (body.thinkingOverride !== null && !isThinkingOverride(body.thinkingOverride)) {
-      throw new BotSettingsError(400, "thinkingOverride must be off, minimal, low, medium, high, xhigh, or null");
+      throw new BotSettingsError(
+        400,
+        "thinkingOverride must be off, minimal, low, medium, high, xhigh, max, or null",
+      );
     }
     if (!Array.isArray(body.skillIds) || body.skillIds.some((item) => typeof item !== "string")) {
       throw new BotSettingsError(400, "skillIds must be an array of strings");
@@ -434,9 +443,19 @@ export class BotManager {
       throw new BotSettingsError(400, "model profile not found");
     }
 
+    const profile = this.profiles.effectiveFor(body.modelProfileId);
+    const profileConfig = profile ? this.profiles.toContainerConfig(profile) : undefined;
+    const thinkingOverride =
+      body.thinkingOverride && profileConfig
+        ? clampThinkingLevel(
+            profileConfig.reasoning,
+            profileConfig.thinkingLevelMap,
+            body.thinkingOverride,
+          )
+        : body.thinkingOverride;
     db.prepare("UPDATE bots SET model_profile_id = ?, thinking_override = ? WHERE id = ?").run(
       body.modelProfileId,
-      body.thinkingOverride,
+      thinkingOverride,
       id,
     );
     this.skills.setEnabledForBot(id, body.skillIds);
@@ -451,9 +470,8 @@ export class BotManager {
     const profile = this.profiles.effectiveFor(bot.model_profile_id);
     if (!profile) return undefined;
     const config = this.profiles.toContainerConfig(profile);
-    if (isThinkingOverride(bot.thinking_override)) {
-      config.thinking = bot.thinking_override;
-    }
+    const requested = isThinkingOverride(bot.thinking_override) ? bot.thinking_override : config.thinking;
+    config.thinking = clampThinkingLevel(config.reasoning, config.thinkingLevelMap, requested);
     return config;
   }
 
@@ -719,16 +737,11 @@ export class BotManager {
     if (!this.live.has(botId)) this.live.set(botId, newLive());
     this.setStatus(botId, "starting");
     const agentsMd = await this.loadAgentsMd(bot);
-    const thinking = isThinkingOverride(bot.thinking_override)
-      ? bot.thinking_override
-      : isThinkingOverride(model.thinking)
-        ? model.thinking
-        : "off";
     const host = await createHostSession({
       bot,
       agentsMd,
       model,
-      thinking,
+      thinking: model.thinking,
       computer: this.computerAccess,
       onEvent: (event: AgentSessionEvent) => {
         const state = this.live.get(botId);
@@ -1067,13 +1080,12 @@ export class BotManager {
       if (!key.startsWith(prefix)) continue;
       try {
         const model = registerPibotModel(host.runtime, config);
-        void host.session.setModel(model);
-        const thinking = isThinkingOverride(bot.thinking_override)
-          ? bot.thinking_override
-          : isThinkingOverride(config.thinking)
-            ? config.thinking
-            : "off";
-        host.session.setThinkingLevel(thinking);
+        void host.session
+          .setModel(model)
+          .then(() => host.session.setThinkingLevel(config.thinking))
+          .catch((err) => {
+            console.warn(`[bots] host setModel ${key}: ${(err as Error).message}`);
+          });
       } catch (err) {
         console.warn(`[bots] host setModel ${key}: ${(err as Error).message}`);
       }

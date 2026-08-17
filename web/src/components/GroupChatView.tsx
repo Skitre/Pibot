@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { THINKING_LEVELS, type Attachment, type Bot, type Group, type GroupMessage, type Message } from "../types";
+import {
+  clampThinkingLevel,
+  supportedThinkingLevels,
+  type Attachment,
+  type Bot,
+  type Group,
+  type GroupMessage,
+  type Message,
+} from "../types";
 import { store, useStore } from "../store";
 import { api } from "../api";
 import { Composer } from "./Composer";
@@ -10,7 +18,7 @@ import { Markdown } from "./Markdown";
 import { formatDayDivider } from "../util";
 import { ScreenIcon, GearIcon } from "./icons";
 import { ThemeToggle } from "./ThemeToggle";
-import { useT } from "../i18n";
+import { translateThinkingLevel, useT } from "../i18n";
 
 interface Props {
   group: Group;
@@ -184,6 +192,18 @@ function ModeratorPanel({ group, onClose }: { group: Group; onClose: () => void 
   const [maxTokens, setMaxTokens] = useState(String(group.moderator_max_tokens || ""));
   const [history, setHistory] = useState(String(group.moderator_history || ""));
   const [thinking, setThinking] = useState(group.moderator_thinking ?? "");
+  const defaultProfile = profiles.find((profile) => profile.is_default === 1) ?? profiles[0];
+  const selectedProfile = profileId
+    ? (profiles.find((profile) => profile.id === profileId) ?? defaultProfile)
+    : defaultProfile;
+  const reasoning = selectedProfile?.reasoning === 1;
+  const thinkingLevelMap = selectedProfile?.thinking_level_map ?? "{}";
+  const thinkingLevels = supportedThinkingLevels(reasoning, thinkingLevelMap);
+  const inheritedThinking = clampThinkingLevel(
+    reasoning,
+    thinkingLevelMap,
+    selectedProfile?.thinking ?? "off",
+  );
   const draft = useRef({ name, profileId, instructions, maxTokens, history, thinking });
   draft.current = { name, profileId, instructions, maxTokens, history, thinking };
 
@@ -240,8 +260,16 @@ function ModeratorPanel({ group, onClose }: { group: Group; onClose: () => void 
         value={profileId}
         onChange={(e) => {
           const next = e.target.value;
+          const nextProfile = next
+            ? (profiles.find((profile) => profile.id === next) ?? defaultProfile)
+            : defaultProfile;
+          const nextThinking =
+            thinking && nextProfile?.reasoning === 1
+              ? clampThinkingLevel(true, nextProfile.thinking_level_map, thinking)
+              : "";
           setProfileId(next);
-          void persist({ profileId: next });
+          setThinking(nextThinking);
+          void persist({ profileId: next, thinking: nextThinking });
         }}
       >
         <option value="">{tr("group.moderatorDefault")}</option>
@@ -254,17 +282,20 @@ function ModeratorPanel({ group, onClose }: { group: Group; onClose: () => void 
       <label style={moderatorLabel}>{tr("group.moderatorThinking")}</label>
       <select
         style={moderatorInput}
-        value={thinking}
+        value={thinking ? clampThinkingLevel(reasoning, thinkingLevelMap, thinking) : ""}
+        disabled={!reasoning}
         onChange={(e) => {
           const next = e.target.value;
           setThinking(next);
           void persist({ thinking: next });
         }}
       >
-        <option value="">{tr("group.moderatorInherit")}</option>
-        {THINKING_LEVELS.map((level) => (
+        <option value="">
+          {tr("group.moderatorInherit")} ({translateThinkingLevel(inheritedThinking, tr)})
+        </option>
+        {thinkingLevels.map((level) => (
           <option key={level} value={level}>
-            {level}
+            {translateThinkingLevel(level, tr)}
           </option>
         ))}
       </select>

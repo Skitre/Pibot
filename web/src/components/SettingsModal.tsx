@@ -8,11 +8,17 @@ import type {
   ProfileInput,
   Skill,
 } from "../types";
+import {
+  DEFAULT_THINKING_LEVEL_MAP_JSON,
+  clampThinkingLevel,
+  parseThinkingLevelMap,
+  supportedThinkingLevels,
+} from "../types";
 import { api } from "../api";
 import { store, useStore } from "../store";
 import { CloseIcon, PlusIcon } from "./icons";
 import { prefs, usePrefs } from "../prefs";
-import { useT } from "../i18n";
+import { translateThinkingLevel, useT } from "../i18n";
 
 type Tab = "models" | "mcp" | "approvals" | "skills" | "general" | "about";
 
@@ -27,8 +33,6 @@ const API_FORMATS = [
   { id: "anthropic-messages", label: "Anthropic Messages" },
 ];
 
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
-
 const emptyForm: ProfileInput = {
   name: "",
   baseUrl: "",
@@ -40,9 +44,21 @@ const emptyForm: ProfileInput = {
   vision: true,
   visionProfileId: null,
   thinking: "off",
+  thinkingLevelMap: DEFAULT_THINKING_LEVEL_MAP_JSON,
   contextWindow: 200000,
   maxTokens: 65536,
 };
+
+function prettyThinkingLevelMap(value: string): string {
+  try {
+    const parsed = parseThinkingLevelMap(value);
+    return Object.keys(parsed).length === 0
+      ? DEFAULT_THINKING_LEVEL_MAP_JSON
+      : JSON.stringify(parsed, null, 2);
+  } catch {
+    return value || DEFAULT_THINKING_LEVEL_MAP_JSON;
+  }
+}
 
 export function SettingsModal({ onClose, initialTab = "models" }: Props) {
   const [tab, setTab] = useState<Tab>(initialTab);
@@ -229,6 +245,7 @@ function ProfileForm({
   onDone: () => void;
   onCancel: () => void;
 }) {
+  const tr = useT();
   const profiles = useStore((s) => s.profiles);
   const [f, setF] = useState<ProfileInput>(
     profile
@@ -242,7 +259,12 @@ function ProfileForm({
           reasoning: profile.reasoning === 1,
           vision: profile.vision === 1,
           visionProfileId: profile.vision_profile_id,
-          thinking: profile.thinking,
+          thinking: clampThinkingLevel(
+            profile.reasoning === 1,
+            profile.thinking_level_map ?? "{}",
+            profile.thinking,
+          ),
+          thinkingLevelMap: prettyThinkingLevelMap(profile.thinking_level_map),
           contextWindow: profile.context_window,
           maxTokens: profile.max_tokens,
         }
@@ -253,9 +275,31 @@ function ProfileForm({
   const [modelList, setModelList] = useState<string[] | null>(null);
   const [fetching, setFetching] = useState(false);
   const [fetchErr, setFetchErr] = useState("");
+  const thinkingLevels = supportedThinkingLevels(f.reasoning, f.thinkingLevelMap);
+  let thinkingMapError = "";
+  try {
+    parseThinkingLevelMap(f.thinkingLevelMap);
+  } catch (e) {
+    thinkingMapError = (e as Error).message;
+  }
 
   const set = <K extends keyof ProfileInput>(k: K, v: ProfileInput[K]) =>
     setF((prev) => ({ ...prev, [k]: v }));
+
+  const setThinkingLevelMap = (value: string) => {
+    setF((prev) => {
+      try {
+        parseThinkingLevelMap(value);
+        return {
+          ...prev,
+          thinkingLevelMap: value,
+          thinking: clampThinkingLevel(prev.reasoning, value, prev.thinking),
+        };
+      } catch {
+        return { ...prev, thinkingLevelMap: value };
+      }
+    });
+  };
 
   const fetchModels = async () => {
     if (!f.baseUrl.trim()) {
@@ -285,10 +329,20 @@ function ProfileForm({
       setError("Name、Base URL、Model ID 为必填项。");
       return;
     }
+    try {
+      parseThinkingLevelMap(f.thinkingLevelMap);
+    } catch (e) {
+      setError(tr("models.thinkingMapInvalid", { error: (e as Error).message }));
+      return;
+    }
     setBusy(true);
     setError("");
     try {
-      const payload = { ...f, modelName: f.modelName.trim() || f.modelId.trim() };
+      const payload = {
+        ...f,
+        modelName: f.modelName.trim() || f.modelId.trim(),
+        thinking: clampThinkingLevel(f.reasoning, f.thinkingLevelMap, f.thinking),
+      };
       if (profile) await api.updateProfile(profile.id, payload);
       else await api.createProfile(payload);
       onDone();
@@ -379,20 +433,47 @@ function ProfileForm({
       <div style={row2}>
         <Field label="支持思考/推理">
           <label style={checkRow}>
-            <input type="checkbox" checked={f.reasoning} onChange={(e) => set("reasoning", e.target.checked)} />
-            <span style={{ fontSize: 13 }}>该模型支持 extended thinking</span>
+            <input
+              type="checkbox"
+              checked={f.reasoning}
+              onChange={(e) => {
+                const reasoning = e.target.checked;
+                setF((prev) => ({
+                  ...prev,
+                  reasoning,
+                  thinking: clampThinkingLevel(reasoning, prev.thinkingLevelMap, prev.thinking),
+                }));
+              }}
+            />
+            <span style={{ fontSize: 13 }}>{tr("models.reasoningCheck")}</span>
           </label>
         </Field>
         <Field label="思考强度">
           <select style={input} value={f.thinking} onChange={(e) => set("thinking", e.target.value)} disabled={!f.reasoning}>
-            {THINKING_LEVELS.map((l) => (
+            {thinkingLevels.map((l) => (
               <option key={l} value={l}>
-                {l}
+                {translateThinkingLevel(l, tr)} ({l})
               </option>
             ))}
           </select>
         </Field>
       </div>
+
+      <Field label={tr("models.thinkingMap")} hint={tr("models.thinkingMapHint")}>
+        <textarea
+          style={{ ...input, minHeight: 116, resize: "vertical", fontFamily: "ui-monospace, monospace" }}
+          value={f.thinkingLevelMap}
+          disabled={!f.reasoning}
+          spellCheck={false}
+          placeholder={DEFAULT_THINKING_LEVEL_MAP_JSON}
+          onChange={(e) => setThinkingLevelMap(e.target.value)}
+        />
+        {thinkingMapError && (
+          <div style={{ ...testResult, color: "#ef4444" }}>
+            {tr("models.thinkingMapInvalid", { error: thinkingMapError })}
+          </div>
+        )}
+      </Field>
 
       <Field
         label="视觉能力"
@@ -526,12 +607,12 @@ function McpTab() {
     <div>
       <h2 style={h2}>MCP Servers</h2>
       <p style={hint}>
-        MCP 运行在共享电脑里，所有 Bot 共用。支持本地 stdio package 和远程 Streamable
-        HTTP（兼容旧 SSE）。文本模型收到 MCP 图片时会自动交给视觉辅助模型转述。
+        MCP 由宿主服务统一连接，所有 Bot 共用，不经过共享电脑。支持本地 stdio package
+        和远程 Streamable HTTP（兼容旧 SSE）。文本模型收到 MCP 图片时会自动交给视觉辅助模型转述。
       </p>
 
       <div style={{ ...warningBox, marginTop: 14 }}>
-        stdio MCP 可以在容器内执行命令。只添加你信任的 package，并把敏感环境变量限制到最低范围。
+        stdio MCP 会在宿主机的隔离数据目录中执行命令。只添加你信任的 package，并把敏感环境变量限制到最低范围。
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 14 }}>
@@ -1288,7 +1369,7 @@ function AboutTab() {
     <div>
       <h2 style={h2}>About</h2>
       <p style={hint}>
-        Pibot — 本机单用户版 Grok Bot 复刻。所有 Bot 共享一台 Docker 电脑，Bot 会话相互独立，大脑层基于 pi-sdk。
+        Pibot — 本地优先的多 Bot AI 工作台。pi-sdk Agent 直接运行在宿主服务中；Docker 只提供所有 Bot 共享的可见电脑、浏览器和文件。
       </p>
       <dl style={{ margin: "16px 0 0" }}>
         <Row k="Bots" v={String(bots.length)} />

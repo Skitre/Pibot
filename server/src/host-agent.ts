@@ -18,7 +18,7 @@ import type { ContainerMcpServer } from "./mcp-servers.js";
 import type { ContainerModelConfig } from "./model-profiles.js";
 import { buildAppendSystemPrompt } from "./prompts/sections.js";
 import { buildHostTools, buildSendMessageTool, GROUP_TOOL_NAMES, HOST_TOOL_NAMES } from "./host-tools.js";
-import type { ThinkingOverride } from "./bot-manager.js";
+import type { ThinkingLevel } from "./thinking.js";
 
 export function hostBotDir(botId: string): string {
   return `/config/bots/${botId}`;
@@ -84,6 +84,7 @@ export function registerPibotModel(runtime: ModelRuntime, config: ContainerModel
         id: config.modelId,
         name: config.modelName,
         reasoning: config.reasoning,
+        thinkingLevelMap: config.thinkingLevelMap,
         input: config.vision ? ["text", "image"] : ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: config.contextWindow,
@@ -123,7 +124,7 @@ export async function createHostSession(opts: {
   bot: BotRow;
   agentsMd: string;
   model: ContainerModelConfig;
-  thinking: ThinkingOverride;
+  thinking: ThinkingLevel;
   computer: ComputerAccess;
   onEvent: (event: AgentSessionEvent) => void;
   requestApproval: (

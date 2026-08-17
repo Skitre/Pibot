@@ -1,5 +1,6 @@
 import { ModelProfileStore } from "./model-profiles.js";
 import { guardNextMembers, normalizeNameList, resolveMembersByNames, type GroupMember } from "./group-chat.js";
+import { clampThinkingLevel, safeThinkingLevelMap } from "./thinking.js";
 
 export interface ModeratorInput {
   task: string;
@@ -149,7 +150,7 @@ export interface ModeratorOptions {
   profileId?: string | null;
   /** 0 或省略表示跟随所选档案的「最大输出 tokens」 */
   maxTokens?: number;
-  /** 空表示不发送思考参数，保持端点默认 */
+  /** 空表示继承所选档案的默认思考强度 */
   thinking?: string;
 }
 
@@ -163,6 +164,11 @@ export async function moderate(
   }
   const profile = (opts?.profileId ? profiles.get(opts.profileId) : undefined) ?? profiles.getDefault();
   if (!profile) return fallback(input, "no model profile configured");
+  const thinking = clampThinkingLevel(
+    profile.reasoning === 1,
+    safeThinkingLevelMap(profile.thinking_level_map),
+    opts?.thinking || profile.thinking,
+  );
   try {
     const result = await profiles.complete(
       profile,
@@ -173,7 +179,7 @@ export async function moderate(
       {
         timeoutMs: 25_000,
         ...(opts?.maxTokens ? { maxTokens: opts.maxTokens } : {}),
-        ...(opts?.thinking ? { thinking: opts.thinking } : {}),
+        thinking,
       },
     );
     if (!result.ok) return fallback(input, `api error: ${result.detail.slice(0, 200)}`);
