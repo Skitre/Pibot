@@ -1,8 +1,12 @@
 import Fastify from "fastify";
 import fastifyCors from "@fastify/cors";
+import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
 import Docker from "dockerode";
 import type { WebSocket } from "ws";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.js";
 import { BotLookError, BotManager, BotSettingsError, parseBotLook } from "./bot-manager.js";
 import { RoutineScheduler } from "./routines.js";
@@ -555,6 +559,21 @@ try {
   console.warn(`[startup] computer startup skipped (docker unavailable?): ${(err as Error).message}`);
 }
 routines.loadAll();
+
+// ---------- 前端静态托管（npm start 单端口模式） ----------
+// web/dist 存在时由本服务直接托管，UI / API / WS 同在 :8790；
+// 开发模式跑 vite(5190) 时通常没有 dist，这段不生效。
+const webDist = join(dirname(fileURLToPath(import.meta.url)), "../../web/dist");
+if (existsSync(webDist)) {
+  await app.register(fastifyStatic, { root: webDist, wildcard: false });
+  app.setNotFoundHandler((req, reply) => {
+    if (req.url.startsWith("/api") || req.url.startsWith("/ws")) {
+      reply.status(404).send({ error: "not found" });
+      return;
+    }
+    reply.sendFile("index.html"); // SPA：其余路径一律回 index.html
+  });
+}
 
 await app.listen({ port: cfg.port, host: "0.0.0.0" });
 console.log(`[pibot] server on http://localhost:${cfg.port}`);

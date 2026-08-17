@@ -38,13 +38,19 @@ npm run image
 # 3. 配置模型中转（复制模板后填 baseUrl / apiKey / 模型名）
 copy server\config.example.json server\config.json
 
-# 4. 启动服务端 + 前端
+# 4. 启动（日常使用）
+npm start
+# 环境检测（Node/Docker/配置/镜像）→ 自动构建前端 → 单端口启动
+# UI / API / WS 都在 http://localhost:8790，就绪后自动打开浏览器
+
+# 开发模式（改代码热更新）
 npm run dev        # server: http://localhost:8790
 npm run dev:web    # web:    http://localhost:5190
 ```
 
-打开 http://localhost:5190，点击左上角 "+" 创建第一个 Bot。
-（端口固定为 5190 且 `strictPort`，被占用时会直接报错而不是漂移到别的端口。）
+日常模式打开 http://localhost:8790，开发模式打开 http://localhost:5190，
+点击左上角 "+" 创建第一个 Bot。
+（Vite 端口固定为 5190 且 `strictPort`，被占用时会直接报错而不是漂移到别的端口。）
 
 ## 目录
 
