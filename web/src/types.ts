@@ -202,10 +202,17 @@ export interface Attachment {
 }
 
 // 共享电脑：整个账户一台，所有 Bot 的会话都跑在里面
+export interface BotScreen {
+  slot: number;
+  vncPort: number;
+}
+
 export interface Computer {
   containerId: string | null;
   status: "offline" | "starting" | "online";
   vncPort: number;
+  screens?: Record<string, BotScreen>;
+  slotCount?: number;
 }
 
 // Skill：跨 Bot 共享的"做事方法"，composer 里 /slug 引用

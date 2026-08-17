@@ -1,13 +1,16 @@
-// 共享电脑薄服务：浏览器（容器内 CDP）+ 桌面截屏。只听 127.0.0.1，不映射 9222。
+// 共享电脑薄服务：每个 Bot 一块独立屏上的浏览器（容器内 CDP）+ 该屏截图。只听 127.0.0.1，不映射 9222。
 import { createServer } from "node:http";
 import { execFile } from "node:child_process";
-import { readFileSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 
 const PORT = Number(process.env.PIBOT_COMPUTER_PORT || 8792);
-const CDP_URL = process.env.PIBOT_CDP_URL || "http://127.0.0.1:9222";
+const SLOT_FILE = "/config/.pibot/screen-slots.json";
 
-let browserCtx = null;
+const browsers = new Map();
+const contexts = new Map();
 const pages = new Map();
+const slotGates = new Map();
+const botGates = new Map();
 
 function json(res, status, body) {
   const data = JSON.stringify(body);
@@ -35,47 +38,255 @@ function botKey(body) {
   return String(body.botId || "default");
 }
 
-async function connectCdp(timeout) {
-  const { chromium } = await import("playwright-core");
-  const browser = await chromium.connectOverCDP(CDP_URL, { timeout });
-  browserCtx = browser.contexts()[0] ?? (await browser.newContext());
-  browser.on("disconnected", () => {
-    browserCtx = null;
-    pages.clear();
-  });
+function readEnvFile(path) {
+  const out = {};
+  if (!existsSync(path)) return out;
+  for (const line of readFileSync(path, "utf8").split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) continue;
+    const i = t.indexOf("=");
+    if (i > 0) out[t.slice(0, i)] = t.slice(i + 1);
+  }
+  return out;
 }
 
-function launchChromium() {
-  const child = execFile("/opt/pibot/bin/start-chromium.sh", [], {
-    env: { ...process.env, DISPLAY: ":1", HOME: "/config" },
+const screenEnv = readEnvFile("/opt/pibot/desktop/screens.env");
+const SLOT_W = Number(screenEnv.PIBOT_SLOT_W || 1600);
+const SLOT_H = Number(screenEnv.PIBOT_SLOT_H || 900);
+const SLOT_COUNT = Number(screenEnv.PIBOT_SLOT_COUNT || 6);
+const PANEL_H = Number(screenEnv.PIBOT_PANEL_H || 56);
+
+function slotRect(index) {
+  const i = ((Number(index) % SLOT_COUNT) + SLOT_COUNT) % SLOT_COUNT;
+  return {
+    slot: i,
+    display: `:${1 + i}`,
+    cdp: `http://127.0.0.1:${9222 + i}`,
+    x: 0,
+    y: 0,
+    w: SLOT_W,
+    h: SLOT_H,
+    winH: SLOT_H - PANEL_H,
+  };
+}
+
+function loadSlots() {
+  try {
+    const raw = JSON.parse(readFileSync(SLOT_FILE, "utf8"));
+    if (raw && typeof raw === "object" && raw.slots && typeof raw.slots === "object") return raw.slots;
+  } catch {
+    // first run
+  }
+  return {};
+}
+
+function saveSlots(slots) {
+  mkdirSync("/config/.pibot", { recursive: true });
+  writeFileSync(SLOT_FILE, JSON.stringify({ slots }, null, 2));
+}
+
+function assignSlot(botId) {
+  const slots = loadSlots();
+  if (Number.isInteger(slots[botId])) return slotRect(slots[botId]);
+  const used = new Set(Object.values(slots).map((n) => Number(n)));
+  let next = 0;
+  while (used.has(next) && next < SLOT_COUNT) next += 1;
+  if (next >= SLOT_COUNT) next = Object.keys(slots).length % SLOT_COUNT;
+  slots[botId] = next;
+  saveSlots(slots);
+  return slotRect(next);
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function withSlotGate(slot, fn) {
+  const prev = slotGates.get(slot) || Promise.resolve();
+  const run = prev.then(fn, fn);
+  slotGates.set(
+    slot,
+    run.then(
+      () => {},
+      () => {},
+    ),
+  );
+  return run;
+}
+
+function withBotGate(botId, fn) {
+  const prev = botGates.get(botId) || Promise.resolve();
+  const run = prev.then(fn, fn);
+  botGates.set(
+    botId,
+    run.then(
+      () => {},
+      () => {},
+    ),
+  );
+  return run;
+}
+
+function screenState() {
+  return { ok: true, text: "screens", slots: loadSlots(), slotCount: SLOT_COUNT };
+}
+
+function handleClaimScreens(body) {
+  const ids = Array.isArray(body.botIds)
+    ? body.botIds
+    : body.botId
+      ? [body.botId]
+      : [];
+  for (const id of ids) {
+    if (id) assignSlot(String(id));
+  }
+  execFile("/opt/pibot/bin/compose-wallpapers.sh", [], { env: { ...process.env, HOME: "/config" } }, () => {});
+  return screenState();
+}
+
+function dropBrowser(slot, browser) {
+  if (browsers.get(slot) === browser) {
+    browsers.delete(slot);
+    contexts.delete(slot);
+  }
+  const ctx = browser.contexts()[0];
+  for (const [id, page] of pages) {
+    if (ctx && page.context() === ctx) pages.delete(id);
+  }
+}
+
+async function connectCdp(slot, timeout) {
+  const rect = slotRect(slot);
+  const { chromium } = await import("playwright-core");
+  const browser = await chromium.connectOverCDP(rect.cdp, { timeout });
+  const ctx = browser.contexts()[0] ?? (await browser.newContext());
+  browsers.set(slot, browser);
+  contexts.set(slot, ctx);
+  browser.on("disconnected", () => dropBrowser(slot, browser));
+}
+
+function launchChromium(slot) {
+  const child = execFile("/opt/pibot/bin/start-chromium.sh", [String(slot)], {
+    env: { ...process.env, DISPLAY: slotRect(slot).display, HOME: "/config" },
   });
   child.unref();
 }
 
-async function getPage(botId) {
-  if (!browserCtx) {
+async function windowIdFor(page) {
+  const session = await page.context().newCDPSession(page);
+  try {
+    const { windowId } = await session.send("Browser.getWindowForTarget");
+    return windowId;
+  } finally {
+    await session.detach().catch(() => {});
+  }
+}
+
+async function placeWindow(page, botId) {
+  const rect = assignSlot(botId);
+  const session = await page.context().newCDPSession(page);
+  try {
+    const { windowId } = await session.send("Browser.getWindowForTarget");
+    await session.send("Browser.setWindowBounds", { windowId, bounds: { windowState: "normal" } });
+    await session.send("Browser.setWindowBounds", {
+      windowId,
+      bounds: { left: 0, top: 0, width: rect.w, height: rect.winH, windowState: "normal" },
+    });
+  } finally {
+    await session.detach().catch(() => {});
+  }
+  return rect;
+}
+
+async function newBotWindow(ctx) {
+  const donor = ctx.pages().find((p) => !p.isClosed());
+  if (!donor) throw new Error("Chromium has no window to attach to");
+  const before = new Set(ctx.pages());
+  let opened = false;
+  try {
+    const session = await ctx.newCDPSession(donor);
+    await session.send("Target.createTarget", { url: "about:blank", newWindow: true });
+    await session.detach().catch(() => {});
+    opened = true;
+  } catch {
+    opened = false;
+  }
+  if (!opened) {
+    await Promise.all([
+      ctx.waitForEvent("page", { timeout: 8000 }),
+      donor.evaluate(() => {
+        window.open("about:blank", "_blank", "popup=yes,noopener=yes");
+      }),
+    ]);
+  }
+  for (let i = 0; i < 50; i++) {
+    const found = ctx.pages().find((p) => !before.has(p) && !p.isClosed());
+    if (found) return found;
+    await sleep(100);
+  }
+  throw new Error("failed to open a new browser window");
+}
+
+async function claimOrOpenPage(ctx, botId) {
+  const open = ctx.pages().filter((p) => !p.isClosed());
+  const takenPages = [...pages.entries()]
+    .filter(([id, p]) => id !== botId && p && !p.isClosed() && p.context() === ctx)
+    .map(([, p]) => p);
+  const takenWindows = new Set();
+  for (const p of takenPages) {
     try {
-      await connectCdp(5000);
+      takenWindows.add(await windowIdFor(p));
     } catch {
-      launchChromium();
-      await new Promise((r) => setTimeout(r, 5000));
-      await connectCdp(15000);
+      // ignore
     }
   }
-  const existing = pages.get(botId);
-  if (existing && !existing.isClosed()) return existing;
-  const open = browserCtx.pages();
-  const taken = new Set([...pages.values()].map((p) => p).filter((p) => p && !p.isClosed()));
-  const blank = open.find(
-    (p) =>
-      !taken.has(p) && (p.url() === "about:blank" || p.url() === "chrome://new-tab-page/"),
+  for (const page of open) {
+    if (takenPages.includes(page)) continue;
+    let win;
+    try {
+      win = await windowIdFor(page);
+    } catch {
+      continue;
+    }
+    if (takenWindows.has(win)) continue;
+    return page;
+  }
+  return newBotWindow(ctx);
+}
+
+async function ensureBrowser(slot) {
+  if (contexts.get(slot)) return;
+  try {
+    await connectCdp(slot, 4000);
+  } catch {
+    launchChromium(slot);
+    await sleep(5000);
+    await connectCdp(slot, 15000);
+  }
+}
+
+async function getPage(botId) {
+  const rect = assignSlot(botId);
+  return withBotGate(botId, () =>
+    withSlotGate(rect.slot, async () => {
+      await ensureBrowser(rect.slot);
+      const ctx = contexts.get(rect.slot);
+      if (!ctx) throw new Error("Chromium is not running on this screen");
+      const existing = pages.get(botId);
+      if (existing && !existing.isClosed()) {
+        await placeWindow(existing, botId).catch(() => {});
+        return existing;
+      }
+      const page = await claimOrOpenPage(ctx, botId);
+      page.on("close", () => {
+        if (pages.get(botId) === page) pages.delete(botId);
+      });
+      pages.set(botId, page);
+      await placeWindow(page, botId).catch(() => {});
+      await sleep(250);
+      return page;
+    }),
   );
-  const page = blank ?? (await browserCtx.newPage());
-  page.on("close", () => {
-    if (pages.get(botId) === page) pages.delete(botId);
-  });
-  pages.set(botId, page);
-  return page;
 }
 
 async function textSnapshot(page) {
@@ -197,12 +408,15 @@ function execFileAsync(cmd, args, opts) {
   });
 }
 
-async function handleDesktopScreenshot() {
+async function handleDesktopScreenshot(body) {
   const file = `/tmp/pibot-screen-${Date.now()}.png`;
-  await execFileAsync("scrot", ["-o", file], { env: { ...process.env, DISPLAY: ":1" } });
+  const id = body && body.botId ? botKey(body) : "";
+  const rect = id ? assignSlot(id) : slotRect(0);
+  const label = `Desktop screenshot (screen ${rect.slot + 1}/${SLOT_COUNT}):`;
+  await execFileAsync("scrot", ["-o", file], { env: { ...process.env, DISPLAY: rect.display } });
   try {
     const data = readFileSync(file).toString("base64");
-    return { ok: true, text: "Desktop screenshot:", image: { data, mimeType: "image/png" } };
+    return { ok: true, text: label, image: { data, mimeType: "image/png" } };
   } finally {
     try {
       unlinkSync(file);
@@ -219,6 +433,8 @@ const routes = {
   "/browser/type": handleType,
   "/browser/screenshot": handleBrowserScreenshot,
   "/desktop/screenshot": handleDesktopScreenshot,
+  "/screens/claim": handleClaimScreens,
+  "/screens/list": screenState,
 };
 
 const server = createServer(async (req, res) => {

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import db, { BotRow, MessageRow } from "./db.js";
-import { AppConfig } from "./config.js";
+import { AppConfig, SCREEN_SLOT_COUNT } from "./config.js";
 import { ComputerAccess, ComputerOfflineError } from "./computer-access.js";
 import { DockerManager } from "./docker-manager.js";
 import {
@@ -103,10 +103,17 @@ export interface Attachment {
   mime: string;
 }
 
+export interface BotScreen {
+  slot: number;
+  vncPort: number;
+}
+
 export interface ComputerState {
   containerId: string | null;
   status: "offline" | "starting" | "online";
   vncPort: number;
+  screens: Record<string, BotScreen>;
+  slotCount: number;
 }
 
 export { THINKING_LEVELS };
@@ -219,7 +226,13 @@ export class BotManager {
     private approvalRules: ApprovalRuleStore,
   ) {
     this.docker = new DockerManager(cfg);
-    this.computer = { containerId: null, status: "offline", vncPort: cfg.docker.vncBasePort };
+    this.computer = {
+      containerId: null,
+      status: "offline",
+      vncPort: cfg.docker.vncBasePort,
+      screens: {},
+      slotCount: SCREEN_SLOT_COUNT,
+    };
     this.computerAccess = new ComputerAccess(this.docker, () => ({
       containerId: this.computer.containerId,
       status: this.computer.status,
@@ -539,7 +552,12 @@ export class BotManager {
   /** 确保共享电脑容器在跑。并发调用会合并成一次。 */
   async ensureComputer(): Promise<void> {
     if (this.computer.status === "online" && this.computer.containerId) {
-      if (await this.docker.isRunning(this.computer.containerId)) return;
+      if (
+        (await this.docker.isRunning(this.computer.containerId)) &&
+        (await this.docker.hasSlotPorts(this.computer.containerId))
+      ) {
+        return;
+      }
     }
     if (this.stopping) await this.stopping.catch(() => {});
     if (this.restarting) return this.restarting;
@@ -582,9 +600,31 @@ export class BotManager {
     this.computer.status = "online";
     this.broadcastComputer();
     this.refreshMemoriesFromComputer();
-    void this.computerAccess.ensureService().catch((err) => {
-      console.warn(`[computer] service: ${(err as Error).message}`);
-    });
+    void this.computerAccess
+      .ensureService()
+      .then(() => this.syncBotScreens())
+      .catch((err) => {
+        console.warn(`[computer] service: ${(err as Error).message}`);
+      });
+  }
+
+  private async syncBotScreens() {
+    if (this.computer.status !== "online") return;
+    const result = await this.computerAccess.service(
+      "/screens/claim",
+      { botIds: this.listBots().map((bot) => bot.id) },
+      15,
+    );
+    const slots = result.slots ?? {};
+    const screens: Record<string, BotScreen> = {};
+    const base = this.cfg.docker.vncBasePort;
+    for (const [id, slot] of Object.entries(slots)) {
+      const n = Number(slot);
+      if (!Number.isInteger(n)) continue;
+      screens[id] = { slot: n, vncPort: base + 1 + n };
+    }
+    this.computer.screens = screens;
+    this.broadcastComputer();
   }
 
   /** 电脑起来后把容器里的 AGENTS.md 同步进本机 system。不唤醒用户休眠的 Bot。 */
@@ -632,6 +672,7 @@ export class BotManager {
       throw err;
     }
     this.computer.status = "offline";
+    this.computer.screens = {};
     this.broadcastComputer();
   }
 
@@ -804,6 +845,9 @@ export class BotManager {
     } catch (err) {
       this.setStatus(id, "error");
       this.saveMessage(id, "system", `Failed to start: ${(err as Error).message}`, "system");
+    }
+    if (this.computer.status === "online") {
+      void this.syncBotScreens().catch(() => undefined);
     }
     return this.getBot(id)!;
   }

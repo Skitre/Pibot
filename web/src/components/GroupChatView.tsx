@@ -16,7 +16,7 @@ import { GroupCluster } from "./GroupCluster";
 import { FileCard, WorkLog } from "./Messages";
 import { Markdown } from "./Markdown";
 import { formatDayDivider } from "../util";
-import { ScreenIcon, GearIcon } from "./icons";
+import { ScreenIcon, PersonIcon } from "./icons";
 import { ThemeToggle } from "./ThemeToggle";
 import { translateThinkingLevel, useT } from "../i18n";
 
@@ -92,7 +92,7 @@ export function GroupChatView({ group, panelOpen, onTogglePanel, onEditGroup }: 
           <button
             style={{ ...hIconBtn, color: panelOpen ? "var(--text-primary)" : "var(--text-secondary)" }}
             onClick={onTogglePanel}
-            title={tr("computer.shared")}
+            title={tr("computer.pickScreen")}
           >
             <ScreenIcon />
           </button>
@@ -102,7 +102,7 @@ export function GroupChatView({ group, panelOpen, onTogglePanel, onEditGroup }: 
             onClick={() => setModeratorOpen((v) => !v)}
             title={tr("group.moderatorSettings")}
           >
-            <GearIcon />
+            <PersonIcon />
           </button>
           {moderatorOpen && (
             <ModeratorPanel key={group.id} group={group} onClose={() => setModeratorOpen(false)} />

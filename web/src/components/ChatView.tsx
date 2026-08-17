@@ -7,7 +7,7 @@ import { MessageThread, BotBubble } from "./Messages";
 import { Composer } from "./Composer";
 import { BotAvatar } from "./BotAvatar";
 import type { BotMarkHandle } from "../mark/BotMark";
-import { ScreenIcon, GearIcon } from "./icons";
+import { ScreenIcon, BotIcon } from "./icons";
 import { ThemeToggle } from "./ThemeToggle";
 import { formatDayDivider, isMainChannel } from "../util";
 import { useT } from "../i18n";
@@ -99,7 +99,7 @@ export function ChatView({ bot, panelOpen, onTogglePanel, onOpenSettings, onOpen
             <ScreenIcon />
           </button>
           <button style={hIconBtn} title={tr("chat.settings")} onClick={onOpenAgentSettings}>
-            <GearIcon />
+            <BotIcon />
           </button>
 
           {menuOpen && (

@@ -1,5 +1,5 @@
 import Docker from "dockerode";
-import { AppConfig } from "./config.js";
+import { AppConfig, SCREEN_SLOT_COUNT } from "./config.js";
 
 const docker = new Docker();
 
@@ -49,6 +49,19 @@ function extractTarFile(tar: Buffer): Buffer | null {
 const COMPUTER_NAME = "pibot-computer-shared";
 const COMPUTER_VOLUME = "pibot-computer-data";
 
+function slotPortBindings(vncBasePort: number) {
+  const bindings: Record<string, Array<{ HostPort: string }>> = {
+    "3000/tcp": [{ HostPort: String(vncBasePort) }],
+  };
+  const exposed: Record<string, object> = { "3000/tcp": {} };
+  for (let i = 0; i < SCREEN_SLOT_COUNT; i++) {
+    const container = `${3001 + i}/tcp`;
+    bindings[container] = [{ HostPort: String(vncBasePort + 1 + i) }];
+    exposed[container] = {};
+  }
+  return { bindings, exposed };
+}
+
 export class DockerManager {
   constructor(private cfg: AppConfig) {}
 
@@ -61,10 +74,22 @@ export class DockerManager {
     }
   }
 
+  async hasSlotPorts(containerId?: string): Promise<boolean> {
+    const existing = await docker.listContainers({
+      all: true,
+      filters: { name: [COMPUTER_NAME] },
+    });
+    const id = containerId ?? existing[0]?.Id;
+    if (!id) return false;
+    const info = await docker.getContainer(id).inspect();
+    return Boolean(info.HostConfig?.PortBindings?.["3001/tcp"]);
+  }
+
   /** 找到（或创建）并启动共享电脑容器，返回其 id 与固定端口 */
   async ensureComputer(): Promise<{ containerId: string; vncPort: number; bridgePort: number }> {
     const vncPort = this.cfg.docker.vncBasePort;
     const bridgePort = this.cfg.docker.bridgeBasePort;
+    const { bindings, exposed } = slotPortBindings(vncPort);
 
     const existing = await docker.listContainers({
       all: true,
@@ -72,8 +97,13 @@ export class DockerManager {
     });
     if (existing.length > 0) {
       const c = docker.getContainer(existing[0].Id);
-      if (existing[0].State !== "running") await c.start();
-      return { containerId: existing[0].Id, vncPort, bridgePort };
+      const info = await c.inspect();
+      if (!info.HostConfig?.PortBindings?.["3001/tcp"]) {
+        await c.remove({ force: true });
+      } else {
+        if (existing[0].State !== "running") await c.start();
+        return { containerId: existing[0].Id, vncPort, bridgePort };
+      }
     }
 
     const container = await docker.createContainer({
@@ -86,14 +116,12 @@ export class DockerManager {
       Labels: { "pibot.computer": "1" },
       HostConfig: {
         Binds: [`${COMPUTER_VOLUME}:/config`],
-        PortBindings: {
-          "3000/tcp": [{ HostPort: String(vncPort) }],
-        },
+        PortBindings: bindings,
         ShmSize: this.cfg.docker.shmSize,
         SecurityOpt: ["seccomp=unconfined"],
         RestartPolicy: { Name: "unless-stopped" },
       },
-      ExposedPorts: { "3000/tcp": {} },
+      ExposedPorts: exposed,
     });
 
     await container.start();

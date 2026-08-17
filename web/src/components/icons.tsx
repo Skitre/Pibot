@@ -49,6 +49,24 @@ export const ScreenIcon = ({ size = 18, color = "currentColor" }: IProps) => (
   </svg>
 );
 
+export const PersonIcon = ({ size = 17, color = "currentColor" }: IProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="8" r="3.2" />
+    <path d="M5 20v-.6A6.4 6.4 0 0 1 11.4 13h1.2A6.4 6.4 0 0 1 19 19.4V20" />
+  </svg>
+);
+
+export const BotIcon = ({ size = 17, color = "currentColor" }: IProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 4.5V7" />
+    <circle cx="12" cy="3.6" r="1" />
+    <rect x="5" y="7" width="14" height="11.5" rx="3.2" />
+    <circle cx="9.3" cy="12.6" r="1.15" fill={color} stroke="none" />
+    <circle cx="14.7" cy="12.6" r="1.15" fill={color} stroke="none" />
+    <path d="M9.5 16.2h5" />
+  </svg>
+);
+
 export const GearIcon = ({ size = 17, color = "currentColor" }: IProps) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="12" cy="12" r="3" />

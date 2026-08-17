@@ -20,6 +20,8 @@ export type ComputerServiceResult = {
   snapshot?: string;
   image?: { data: string; mimeType?: string };
   error?: string;
+  slots?: Record<string, number>;
+  slotCount?: number;
 };
 
 /** 电脑类工具失败时抛给模型看的文案。不要报 Bot offline。 */

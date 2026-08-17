@@ -24,6 +24,9 @@ export interface DockerConfig {
   shmSize: number;
 }
 
+/** 与 bot-image/opt/pibot/desktop/screens.env 的 PIBOT_SLOT_COUNT 对齐 */
+export const SCREEN_SLOT_COUNT = 6;
+
 export interface AppConfig {
   relay: RelayConfig;
   docker: DockerConfig;

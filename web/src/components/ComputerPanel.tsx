@@ -1,18 +1,28 @@
 import { useEffect, useRef, useState } from "react";
-import type { Bot, Routine } from "../types";
+import type { Bot, Group, Routine } from "../types";
 import { api } from "../api";
 import { useStore } from "../store";
-import { GearIcon, CloseIcon, PlayIcon, TrashIcon } from "./icons";
+import { MoreIcon, CloseIcon, PlayIcon, TrashIcon } from "./icons";
+import { BotAvatar } from "./BotAvatar";
 import { askConfirm } from "../prefs";
 import { useT } from "../i18n";
 
 interface Props {
   bot?: Bot | null;
+  group?: Group | null;
   onClose: () => void;
 }
 
-export function ComputerPanel({ bot, onClose }: Props) {
+export function ComputerPanel({ bot, group, onClose }: Props) {
   const computer = useStore((s) => s.computer);
+  const bots = useStore((s) => s.bots);
+  const groupMembers = useStore((s) => s.groupMembers);
+  const working = useStore((s) => s.working);
+  const workingChannel = useStore((s) => s.workingChannel);
+  const members = group ? resolveGroupMembers(group, groupMembers, bots) : [];
+  const [pickedByGroup, setPickedByGroup] = useState<Record<string, string>>({});
+  const pickedId = group ? pickedByGroup[group.id] : undefined;
+  const screenBot = bot ?? members.find((row) => row.id === pickedId) ?? members[0] ?? null;
   const [expanded, setExpanded] = useState(false);
   const [routines, setRoutines] = useState<Routine[]>([]);
   const [creating, setCreating] = useState(false);
@@ -22,9 +32,15 @@ export function ComputerPanel({ bot, onClose }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const tr = useT();
-  // 共享电脑架构：整个账户一台电脑，KasmVNC 端口是全局的
-  const url =
-    computer?.vncPort ? `http://${location.hostname}:${computer.vncPort}/` : null;
+  const screenPort = botScreenPort(computer, screenBot, bots, members);
+  const url = screenPort ? `http://${location.hostname}:${screenPort}/` : null;
+  const pickScreen = (id: string) => {
+    if (!group) return;
+    setPickedByGroup((prev) => (prev[group.id] === id ? prev : { ...prev, [group.id]: id }));
+  };
+  const screenTitle = screenBot
+    ? tr("computer.botScreen", { name: screenBot.name })
+    : tr("computer.shared");
 
   useEffect(() => {
     if (!bot) {
@@ -105,13 +121,32 @@ export function ComputerPanel({ bot, onClose }: Props) {
     return (
       <div style={fullOverlay}>
         <div style={fullBar}>
-          <span style={{ fontSize: 13, fontWeight: 600 }}>{tr("computer.shared")}</span>
-          <span style={controlTag}>{tr("computer.inControl")}</span>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>{screenTitle}</span>
+          {group && members.length > 1 && (
+            <div style={fullPicker}>
+              {members.map((row) => (
+                <button
+                  key={row.id}
+                  style={fullPickerBtn(row.id === screenBot?.id)}
+                  title={tr("computer.botScreen", { name: row.name })}
+                  onClick={() => pickScreen(row.id)}
+                >
+                  <BotAvatar
+                    id={row.id}
+                    color={row.avatar_color}
+                    size={22}
+                    working={!!working[row.id]}
+                  />
+                </button>
+              ))}
+            </div>
+          )}
+          <span style={{ ...controlTag, position: "static", marginLeft: "auto" }}>{tr("computer.inControl")}</span>
           <button style={iconBtn} onClick={() => setExpanded(false)} title={tr("computer.minimize")}>
             <CloseIcon />
           </button>
         </div>
-        <iframe src={url} style={fullFrame} title="bot-screen-full" />
+        <iframe key={`${screenBot?.id ?? "none"}:${url}`} src={url} style={fullFrame} title="bot-screen-full" />
       </div>
     );
   }
@@ -127,7 +162,7 @@ export function ComputerPanel({ bot, onClose }: Props) {
               title={tr("computer.settings")}
               onClick={() => setMenuOpen((v) => !v)}
             >
-              <GearIcon size={15} />
+              <MoreIcon size={15} />
             </button>
             {menuOpen && (
               <div style={settingsMenu}>
@@ -170,7 +205,7 @@ export function ComputerPanel({ bot, onClose }: Props) {
         >
           {online && url ? (
             <>
-              <iframe src={url} style={thumbFrame} title="bot-screen" scrolling="no" />
+              <iframe key={`${screenBot?.id ?? "none"}:${url}`} src={url} style={thumbFrame} title="bot-screen" scrolling="no" />
               <div style={thumbOverlay}>
                 <span style={{ ...controlTag, position: "static" }}>
                   {tr("computer.working")}
@@ -196,8 +231,29 @@ export function ComputerPanel({ bot, onClose }: Props) {
             </div>
           )}
         </button>
-        <div style={thumbLabel}>{tr("computer.label")}</div>
+        <div style={thumbLabel}>{screenBot ? screenTitle : tr("computer.label")}</div>
       </div>
+
+      {group && members.length > 0 && (
+        <div style={pickerSection}>
+          <div style={pickerTitle}>{tr("computer.pickScreen")}</div>
+          {members.map((row) => {
+            const selected = row.id === screenBot?.id;
+            const busy = !!working[row.id] && workingChannel[row.id] === `group:${group.id}`;
+            return (
+              <button
+                key={row.id}
+                style={pickerRow(selected)}
+                onClick={() => pickScreen(row.id)}
+              >
+                <BotAvatar id={row.id} color={row.avatar_color} size={26} working={busy} />
+                <span style={pickerName}>{row.name}</span>
+                {busy && <span style={pickerBusy}>{tr("computer.working")}</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {bot && (
       <div style={routinesSection}>
@@ -224,6 +280,34 @@ export function ComputerPanel({ bot, onClose }: Props) {
       )}
     </div>
   );
+}
+
+function resolveGroupMembers(
+  group: Group,
+  groupMembers: Record<string, Bot[]>,
+  bots: Bot[],
+): Bot[] {
+  const stored = groupMembers[group.id];
+  if (stored?.length) return stored;
+  return (group.bot_ids ?? [])
+    .map((id) => bots.find((row) => row.id === id))
+    .filter((row): row is Bot => !!row);
+}
+
+function botScreenPort(
+  computer: { vncPort: number; screens?: Record<string, { vncPort: number }>; slotCount?: number } | null,
+  bot: Bot | null | undefined,
+  bots: Bot[],
+  members: Bot[],
+) {
+  if (!computer?.vncPort || !bot) return null;
+  const claimed = computer.screens?.[bot.id]?.vncPort;
+  if (claimed) return claimed;
+  const idx = bots.findIndex((row) => row.id === bot.id);
+  const fallback = idx >= 0 ? idx : members.findIndex((row) => row.id === bot.id);
+  if (fallback < 0) return null;
+  const count = computer.slotCount && computer.slotCount > 0 ? computer.slotCount : 6;
+  return computer.vncPort + 1 + (fallback % count);
 }
 
 function RoutineRow({ routine, onChange }: { routine: Routine; onChange: () => void }) {
@@ -393,6 +477,59 @@ const thumbLabel: React.CSSProperties = {
   color: "var(--text-secondary)",
   marginTop: 6,
 };
+const pickerSection: React.CSSProperties = {
+  marginTop: 14,
+  padding: "0 16px",
+  display: "flex",
+  flexDirection: "column",
+  gap: 4,
+  minHeight: 0,
+  overflowY: "auto",
+};
+const pickerTitle: React.CSSProperties = {
+  fontSize: 11,
+  color: "var(--text-secondary)",
+  padding: "0 4px 4px",
+};
+const pickerRow = (selected: boolean): React.CSSProperties => ({
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  width: "100%",
+  textAlign: "left",
+  padding: "7px 8px",
+  borderRadius: 8,
+  background: selected ? "var(--bg-active)" : "transparent",
+  color: "var(--text-primary)",
+});
+const pickerName: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  fontSize: 13,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+const pickerBusy: React.CSSProperties = {
+  fontSize: 10.5,
+  color: "var(--text-secondary)",
+  flexShrink: 0,
+};
+const fullPicker: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 4,
+  marginLeft: 8,
+};
+const fullPickerBtn = (selected: boolean): React.CSSProperties => ({
+  width: 28,
+  height: 28,
+  borderRadius: 8,
+  display: "grid",
+  placeItems: "center",
+  background: selected ? "var(--bg-active)" : "transparent",
+  padding: 0,
+});
 const controlTag: React.CSSProperties = {
   position: "absolute",
   fontSize: 10.5,

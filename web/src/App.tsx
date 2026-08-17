@@ -112,7 +112,7 @@ export default function App() {
       )}
 
       {(activeBot || activeGroup) && panelOpen && (
-        <ComputerPanel bot={activeBot} onClose={() => setPanelOpen(false)} />
+        <ComputerPanel bot={activeBot} group={activeGroup} onClose={() => setPanelOpen(false)} />
       )}
 
       {showCreateBot && (

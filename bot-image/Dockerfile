@@ -34,7 +34,16 @@ RUN useradd -u 1000 -U -d /config -s /bin/bash abc \
     && mkdir -p /config /opt/pibot /opt/pibot/bin
 
 # 深色 GTK 主题。单独一层，避免重跑上面那大包。
-RUN apt-get update && apt-get install -y --no-install-recommends greybird-gtk-theme plank \
+RUN apt-get update && apt-get install -y --no-install-recommends greybird-gtk-theme \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# 常用 CLI。单独一层，避免动 XFCE/Chromium 缓存。
+# 不装 gcc / Go / Rust；Python 3 已在镜像里，这里只补 pip/venv。
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        wget unzip zip jq ripgrep tmux tree file \
+        python3-pip python3-venv \
+        ffmpeg gh \
+        x11vnc \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY opt/pibot /opt/pibot
@@ -46,6 +55,6 @@ COPY root/ /
 RUN sed -i 's/\r$//' /opt/pibot/bin/*.sh /etc/supervisor/supervisord.conf /etc/supervisor/conf.d/*.conf \
     && chmod +x /opt/pibot/bin/*.sh
 
-EXPOSE 3000
+EXPOSE 3000-3006
 VOLUME /config
 ENTRYPOINT ["/opt/pibot/bin/entrypoint.sh"]

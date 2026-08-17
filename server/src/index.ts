@@ -580,6 +580,14 @@ routines.loadAll();
 // 开发模式跑 vite(5190) 时通常没有 dist，这段不生效。
 const webDist = join(dirname(fileURLToPath(import.meta.url)), "../../web/dist");
 if (existsSync(webDist)) {
+  const webAssets = join(webDist, "assets");
+  if (existsSync(webAssets)) {
+    await app.register(fastifyStatic, {
+      root: webAssets,
+      prefix: "/assets/",
+      decorateReply: false,
+    });
+  }
   await app.register(fastifyStatic, { root: webDist, wildcard: false });
   app.setNotFoundHandler((req, reply) => {
     if (req.url.startsWith("/api") || req.url.startsWith("/ws")) {

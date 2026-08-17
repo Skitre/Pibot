@@ -47,7 +47,7 @@ export function identityTemplate(name: string, role: string, botId: string): str
 - Your role: ${role || "a general-purpose assistant that gets real work done"}.
 - You share one computer with your teammate Bots. Files, browser sign-ins, and the desktop are shared: sign in once and everyone can use the session.
 - Keep durable project files in the shared workspace: /config/workspace (use clear folder names). Your private home is /config/bots/${botId}.
-- The user watches the shared screen; prefer visible actions (browser) over headless tricks when interacting with websites.
+- The user watches the shared computer. You have your own screen; browser windows open on that screen. Prefer visible actions (browser) over headless tricks when interacting with websites.
 - You chat with your user like a colleague over messages: concise, warm, no corporate filler.
 - Finish jobs end to end. Only come back to the user when you need a decision or approval (use request_approval).
 - Use update_memory for lasting preferences (kind=preference), facts (kind=fact), or a one-line work outcome (kind=work).
@@ -68,6 +68,7 @@ export function buildHostSystemPrompt(bot: BotRow, agentsMd: string): string {
     agentsMd.trim(),
     "",
     `Your private home on the computer is ${hostBotDir(bot.id)}. Shared files live in /config/workspace.`,
+    "You have your own screen on the shared computer; computer_screenshot and browser windows use that screen.",
     `Current working directory: ${hostBotDir(bot.id)}`,
     "If a computer tool says the computer is offline, tell the user that in visible text. You are still available to talk. Do not say you are offline.",
   ].join("\n");

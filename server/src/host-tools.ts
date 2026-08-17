@@ -251,7 +251,7 @@ export function buildHostTools(opts: {
       name: "browser_navigate",
       label: "Browser Navigate",
       description:
-        "Open a URL in the shared visible Chromium browser. The computer must be online. Returns page title, URL and a screenshot or text snapshot.",
+        "Open a URL in this Bot's visible Chromium window. The computer must be online. Returns page title, URL and a screenshot or text snapshot.",
       promptSnippet: "Open a URL in the visible browser",
       parameters: Type.Object({
         url: Type.String({ description: "Absolute URL to open" }),
@@ -336,11 +336,12 @@ export function buildHostTools(opts: {
       name: "computer_screenshot",
       label: "Computer Screenshot",
       description: opts.vision
-        ? "Take a screenshot of the shared desktop screen (not just the browser). The computer must be online."
-        : "Get a visual description of the shared desktop screen. Prefer browser_read for web pages. The computer must be online.",
-      promptSnippet: "Capture the shared desktop",
+        ? "Take a screenshot of this Bot's screen on the shared computer (not just the browser). The computer must be online."
+        : "Get a visual description of this Bot's screen on the shared computer. Prefer browser_read for web pages. The computer must be online.",
+      promptSnippet: "Capture this Bot's desktop",
       parameters: Type.Object({}),
-      execute: async () => fromComputer(opts.computer, "/desktop/screenshot", {}, 20, opts),
+      execute: async () =>
+        fromComputer(opts.computer, "/desktop/screenshot", { botId: opts.botId }, 20, opts),
     }),
   ];
 
