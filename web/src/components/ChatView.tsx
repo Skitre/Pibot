@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Attachment, Bot } from "../types";
 import { store, useStore } from "../store";
 import { api } from "../api";
-import { usePrefs } from "../prefs";
+import { askConfirm, usePrefs } from "../prefs";
 import { MessageThread, BotBubble } from "./Messages";
 import { Composer } from "./Composer";
 import { BotAvatar } from "./BotAvatar";
@@ -11,6 +11,7 @@ import { ScreenIcon, BotIcon } from "./icons";
 import { ThemeToggle } from "./ThemeToggle";
 import { formatDayDivider, isMainChannel } from "../util";
 import { useT } from "../i18n";
+import { MenuItem, MenuSep, useContextMenu } from "./ContextMenu";
 
 interface Props {
   bot: Bot;
@@ -18,11 +19,19 @@ interface Props {
   onTogglePanel: () => void;
   onOpenSettings: () => void;
   onOpenAgentSettings: () => void;
+  onOpenMemory: () => void;
 }
 
 const EMPTY_MESSAGES: import("../types").Message[] = [];
 
-export function ChatView({ bot, panelOpen, onTogglePanel, onOpenSettings, onOpenAgentSettings }: Props) {
+export function ChatView({
+  bot,
+  panelOpen,
+  onTogglePanel,
+  onOpenSettings,
+  onOpenAgentSettings,
+  onOpenMemory,
+}: Props) {
   // 选择器必须返回稳定引用，否则 useSyncExternalStore 会判定快照持续变化 → 无限更新
   const messages = useStore((s) => s.messages[bot.id]) ?? EMPTY_MESSAGES;
   const stream = useStore((s) => (isMainChannel(s.workingChannel[bot.id]) ? s.stream[bot.id] : undefined));
@@ -44,6 +53,7 @@ export function ChatView({ bot, panelOpen, onTogglePanel, onOpenSettings, onOpen
   const profiles = useStore((s) => s.profiles);
   const p = usePrefs();
   const tr = useT();
+  const { open, close } = useContextMenu();
   const [menuOpen, setMenuOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [listening, setListening] = useState(false);
@@ -68,10 +78,44 @@ export function ChatView({ bot, panelOpen, onTogglePanel, onOpenSettings, onOpen
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, stream, working]);
 
+  useEffect(() => {
+    const hide = () => setMenuOpen(false);
+    window.addEventListener("pibot-app-menu", hide);
+    return () => window.removeEventListener("pibot-app-menu", hide);
+  }, []);
+
+  const headerMenu = (
+    <>
+      <MenuItem
+        onClick={() => {
+          if (!panelOpen) onTogglePanel();
+        }}
+      >
+        {tr("chat.openScreen")}
+      </MenuItem>
+      <MenuItem onClick={onOpenAgentSettings}>{tr("chat.settings")}</MenuItem>
+      <MenuItem onClick={onOpenMemory}>{tr("sidebar.memory")}</MenuItem>
+      <MenuSep />
+      <MenuItem
+        danger
+        onClick={() => {
+          if (askConfirm(tr("sidebar.clearChatConfirm", { name: bot.name }))) {
+            void api.clearMessages(bot.id);
+          }
+        }}
+      >
+        {tr("sidebar.clearChat")}
+      </MenuItem>
+    </>
+  );
+
   return (
     <div style={root}>
       <div style={header}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div
+          style={{ display: "flex", alignItems: "center", gap: 10 }}
+          onContextMenu={(e) => open(e, headerMenu)}
+        >
           <BotAvatar
             ref={markRef}
             id={bot.id}
@@ -86,7 +130,14 @@ export function ChatView({ bot, panelOpen, onTogglePanel, onOpenSettings, onOpen
         </div>
         <div style={{ display: "flex", gap: 4, alignItems: "center", position: "relative" }}>
           {activeProfile && (
-            <button style={modelChip} onClick={() => setMenuOpen((v) => !v)} title={tr("chat.changeModel")}>
+            <button
+              style={modelChip}
+              onClick={() => {
+                close();
+                setMenuOpen((v) => !v);
+              }}
+              title={tr("chat.changeModel")}
+            >
               {activeProfile.model_name}
             </button>
           )}

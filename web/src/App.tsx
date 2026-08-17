@@ -14,6 +14,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import { BotAvatar } from "./components/BotAvatar";
 import { usePrefs, localeTag } from "./prefs";
 import { useT } from "./i18n";
+import { ContextMenuProvider, MenuItem, useContextMenu } from "./components/ContextMenu";
 
 export default function App() {
   const bots = useStore((s) => s.bots);
@@ -77,6 +78,7 @@ export default function App() {
     selection?.kind === "group" ? (groups.find((g) => g.id === selection.id) ?? null) : null;
 
   return (
+    <ContextMenuProvider>
     <div style={{ display: "flex", height: "100%" }}>
       <Sidebar
         bots={bots}
@@ -99,6 +101,7 @@ export default function App() {
           onTogglePanel={() => setPanelOpen((v) => !v)}
           onOpenSettings={() => setShowSettings(true)}
           onOpenAgentSettings={() => setEditBotId(activeBot.id)}
+          onOpenMemory={() => setMemoryBotId(activeBot.id)}
         />
       ) : activeGroup ? (
         <GroupChatView
@@ -169,13 +172,23 @@ export default function App() {
 
       {!connected && <div style={offline}>{tr("app.reconnecting")}</div>}
     </div>
+    </ContextMenuProvider>
   );
 }
 
 function EmptyState({ onNew }: { onNew: () => void }) {
   const tr = useT();
+  const { open } = useContextMenu();
   return (
-    <div style={empty}>
+    <div
+      style={empty}
+      onContextMenu={(e) =>
+        open(
+          e,
+          <MenuItem onClick={onNew}>{tr("app.createFirst")}</MenuItem>,
+        )
+      }
+    >
       <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 8 }}>
         <BotAvatar color="#0a0a0a" size={40} mono />
         <span style={{ fontSize: 30, fontWeight: 600, letterSpacing: "-0.02em" }}>

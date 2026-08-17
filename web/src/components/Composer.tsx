@@ -161,6 +161,7 @@ export function Composer({
         </div>
       )}
       <div
+        data-edit-field=""
         style={{ ...pill, ...(dragOver ? pillDragOver : {}) }}
         onDragOver={(e) => {
           if (!allowAttachments) return;

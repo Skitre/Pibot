@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import {
   clampThinkingLevel,
   supportedThinkingLevels,
@@ -13,12 +13,14 @@ import { api } from "../api";
 import { Composer } from "./Composer";
 import { BotAvatar } from "./BotAvatar";
 import { GroupCluster } from "./GroupCluster";
-import { FileCard, WorkLog } from "./Messages";
+import { FileCard, textMenu, WorkLog } from "./Messages";
 import { Markdown } from "./Markdown";
 import { formatDayDivider } from "../util";
 import { ScreenIcon, PersonIcon } from "./icons";
 import { ThemeToggle } from "./ThemeToggle";
 import { translateThinkingLevel, useT } from "../i18n";
+import { askConfirm } from "../prefs";
+import { MenuItem, MenuSep, useContextMenu } from "./ContextMenu";
 
 interface Props {
   group: Group;
@@ -42,6 +44,7 @@ export function GroupChatView({ group, panelOpen, onTogglePanel, onEditGroup }: 
   const scrollRef = useRef<HTMLDivElement>(null);
   const [uploading, setUploading] = useState(false);
   const [moderatorOpen, setModeratorOpen] = useState(false);
+  const { open, close } = useContextMenu();
   const tr = useT();
   const hostName = group.moderator_name?.trim() || tr("group.hostFallback");
   const groupChannel = `group:${group.id}`;
@@ -57,6 +60,37 @@ export function GroupChatView({ group, panelOpen, onTogglePanel, onEditGroup }: 
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, busy.length, assigning, waiting]);
 
+  useEffect(() => {
+    const hide = () => setModeratorOpen(false);
+    window.addEventListener("pibot-app-menu", hide);
+    return () => window.removeEventListener("pibot-app-menu", hide);
+  }, []);
+
+  const headerMenu = (
+    <>
+      <MenuItem
+        onClick={() => {
+          if (!panelOpen) onTogglePanel();
+        }}
+      >
+        {tr("group.openScreenPanel")}
+      </MenuItem>
+      <MenuItem onClick={onEditGroup}>{tr("sidebar.editThread")}</MenuItem>
+      <MenuItem onClick={() => setModeratorOpen(true)}>{tr("group.moderatorSettings")}</MenuItem>
+      <MenuSep />
+      <MenuItem
+        danger
+        onClick={() => {
+          if (askConfirm(tr("sidebar.deleteThreadConfirm", { name: group.name }))) {
+            void api.deleteGroup(group.id);
+          }
+        }}
+      >
+        {tr("sidebar.deleteThread")}
+      </MenuItem>
+    </>
+  );
+
   const mentionNames = useMemo(
     () => [...members.map((m) => m.name), "everyone"],
     [members],
@@ -70,7 +104,13 @@ export function GroupChatView({ group, panelOpen, onTogglePanel, onEditGroup }: 
   return (
     <div style={root}>
       <div style={header}>
-        <button className="group-title-btn" style={titleBtn} onClick={onEditGroup} title={tr("sidebar.editThread")}>
+        <button
+          className="group-title-btn"
+          style={titleBtn}
+          onClick={onEditGroup}
+          title={tr("sidebar.editThread")}
+          onContextMenu={(e) => open(e, headerMenu)}
+        >
           <GroupCluster
             members={members}
             size={24}
@@ -99,7 +139,10 @@ export function GroupChatView({ group, panelOpen, onTogglePanel, onEditGroup }: 
           <button
             data-moderator-toggle=""
             style={{ ...hIconBtn, color: moderatorOpen ? "var(--text-primary)" : "var(--text-secondary)" }}
-            onClick={() => setModeratorOpen((v) => !v)}
+            onClick={() => {
+              close();
+              setModeratorOpen((v) => !v);
+            }}
             title={tr("group.moderatorSettings")}
           >
             <PersonIcon />
@@ -410,19 +453,26 @@ function GroupBubble({
   color: string;
   botId: string | null;
 }) {
+  const { open } = useContextMenu();
+  const tr = useT();
+  const onTextMenu = (e: ReactMouseEvent) => open(e, textMenu(message.content, tr));
   if (message.kind === "system") {
-    return <div style={systemLine}>{message.content}</div>;
+    return (
+      <div style={systemLine} onContextMenu={onTextMenu}>
+        {message.content}
+      </div>
+    );
   }
   const isUser = message.bot_id === null;
   if (isUser) {
     return (
-      <div style={{ display: "flex", justifyContent: "flex-end", margin: "3px 0" }}>
+      <div style={{ display: "flex", justifyContent: "flex-end", margin: "3px 0" }} onContextMenu={onTextMenu}>
         <div style={bubbleUser}>{message.content}</div>
       </div>
     );
   }
   return (
-    <div style={{ display: "flex", gap: 9, margin: "6px 0", alignItems: "flex-start" }}>
+    <div style={{ display: "flex", gap: 9, margin: "6px 0", alignItems: "flex-start" }} onContextMenu={onTextMenu}>
       <BotAvatar id={botId ?? undefined} color={color} size={26} />
       <div style={{ minWidth: 0 }}>
         <div style={authorLine}>{message.author}</div>

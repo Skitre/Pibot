@@ -146,6 +146,13 @@ class Store {
     this.set({ unread: { ...this.state.unread, [botId]: !read } });
   }
 
+  markGroupRead(groupId: string) {
+    if (!this.state.groupUnread[groupId]) return;
+    const groupUnread = { ...this.state.groupUnread };
+    delete groupUnread[groupId];
+    this.set({ groupUnread });
+  }
+
   private connect() {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);

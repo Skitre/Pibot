@@ -5,6 +5,7 @@ import { store } from "../store";
 import { api } from "../api";
 import { CopyIcon, CheckIcon, FileIcon, ChevronRight, DownloadIcon, CloseIcon } from "./icons";
 import { useT, translateToolName, translateOption, type TFn } from "../i18n";
+import { copyText, MenuItem, selectedText, useContextMenu } from "./ContextMenu";
 
 // 悬停复制按钮：官方气泡右侧的操作列（这里先实现复制）
 function CopyAction({ text }: { text: string }) {
@@ -27,17 +28,54 @@ function CopyAction({ text }: { text: string }) {
   );
 }
 
+export function textMenu(text: string, tr: TFn) {
+  const sel = selectedText();
+  return (
+    <>
+      {sel ? <MenuItem onClick={() => copyText(sel)}>{tr("msg.copySelection")}</MenuItem> : null}
+      <MenuItem onClick={() => copyText(text)}>{tr("msg.copy")}</MenuItem>
+    </>
+  );
+}
+
+function fileMenu(
+  name: string,
+  url: string,
+  downloadUrl: string,
+  image: boolean,
+  tr: TFn,
+  onOpen?: () => void,
+) {
+  return (
+    <>
+      {url ? <MenuItem onClick={() => (onOpen ? onOpen() : window.open(url, "_blank"))}>{tr("file.open")}</MenuItem> : null}
+      {image && url ? (
+        <MenuItem onClick={() => window.open(url, "_blank")}>{tr("msg.openTab")}</MenuItem>
+      ) : null}
+      {downloadUrl ? (
+        <MenuItem onClick={() => window.open(downloadUrl, "_blank")}>{tr("file.download")}</MenuItem>
+      ) : null}
+      <MenuItem onClick={() => copyText(name)}>{tr("msg.copyFilename")}</MenuItem>
+    </>
+  );
+}
+
 function AttachmentView({ att, botId }: { att: Attachment; botId: string }) {
+  const { open } = useContextMenu();
+  const tr = useT();
   const url = api.fileUrl(botId, att.path);
-  if (att.mime.startsWith("image/")) {
+  const image = att.mime.startsWith("image/");
+  const onCtx = (e: React.MouseEvent) =>
+    open(e, fileMenu(att.name, url, url, image, tr));
+  if (image) {
     return (
-      <a href={url} target="_blank" rel="noreferrer">
+      <a href={url} target="_blank" rel="noreferrer" onContextMenu={onCtx}>
         <img src={url} alt={att.name} style={attImage} />
       </a>
     );
   }
   return (
-    <a href={url} target="_blank" rel="noreferrer" style={attFile}>
+    <a href={url} target="_blank" rel="noreferrer" style={attFile} onContextMenu={onCtx}>
       <FileIcon size={15} color="var(--text-secondary)" />
       <span style={attFileName}>{att.name}</span>
       <span style={attFileSize}>{formatSize(att.size)}</span>
@@ -70,6 +108,7 @@ function isTextPreview(meta: FileMeta): boolean {
 }
 
 export function FileCard({ message }: { message: Message }) {
+  const { open } = useContextMenu();
   const meta = fileMeta(message);
   const tr = useT();
   const [preview, setPreview] = useState(false);
@@ -84,7 +123,19 @@ export function FileCard({ message }: { message: Message }) {
 
   return (
     <>
-      <div style={{ display: "flex", justifyContent: "flex-start", margin: "6px 0" }}>
+      <div
+        style={{ display: "flex", justifyContent: "flex-start", margin: "6px 0" }}
+        onContextMenu={(e) =>
+          open(
+            e,
+            fileMenu(meta.name || message.content, url, downloadUrl, image, tr, () => {
+              if (canPreview && url) setPreview(true);
+              else if (pdf && url) window.open(url, "_blank");
+              else if (downloadUrl) window.open(downloadUrl, "_blank");
+            }),
+          )
+        }
+      >
         <div style={fileCard}>
           {image && url && !broken && (
             <button style={fileThumbBtn} onClick={() => setPreview(true)} title={tr("file.open")}>
@@ -219,6 +270,7 @@ function FilePreview({
 }
 
 export function UserBubble({ message }: { message: Message }) {
+  const { open } = useContextMenu();
   const meta = message.meta ? (JSON.parse(message.meta) as { attachments?: Attachment[] }) : {};
   const attachments = meta.attachments ?? [];
   const tr = useT();
@@ -229,7 +281,13 @@ export function UserBubble({ message }: { message: Message }) {
         ? tr("msg.from", { name: message.author.slice(4) })
         : null;
   return (
-    <div className="msg-row" style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 6, margin: "3px 0" }}>
+    <div
+      className="msg-row"
+      style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 6, margin: "3px 0" }}
+      onContextMenu={(e) => {
+        if (message.content) open(e, textMenu(message.content, tr));
+      }}
+    >
       {message.content && <CopyAction text={message.content} />}
       <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4, maxWidth: "74%" }}>
         {source && <div style={sourceTag}>{source}</div>}
@@ -244,8 +302,14 @@ export function UserBubble({ message }: { message: Message }) {
 
 export function BotBubble({ text, botId }: { text: string; botId?: string }) {
   void botId;
+  const { open } = useContextMenu();
+  const tr = useT();
   return (
-    <div className="msg-row" style={{ display: "flex", justifyContent: "flex-start", alignItems: "center", gap: 6, margin: "3px 0" }}>
+    <div
+      className="msg-row"
+      style={{ display: "flex", justifyContent: "flex-start", alignItems: "center", gap: 6, margin: "3px 0" }}
+      onContextMenu={(e) => open(e, textMenu(text, tr))}
+    >
       <div style={bubbleBot}>
         <Markdown text={text} />
       </div>
@@ -255,7 +319,13 @@ export function BotBubble({ text, botId }: { text: string; botId?: string }) {
 }
 
 export function SystemLine({ text }: { text: string }) {
-  return <div style={systemLine}>{text}</div>;
+  const { open } = useContextMenu();
+  const tr = useT();
+  return (
+    <div style={systemLine} onContextMenu={(e) => open(e, textMenu(text, tr))}>
+      {text}
+    </div>
+  );
 }
 
 function toolMeta(message: Message): ToolMeta {
@@ -311,10 +381,26 @@ function WorkStep({ message }: { message: Message }) {
 
 // 一轮回复里连续的工具调用合并成一条"工作记录"，默认折叠，出错时自动展开
 export function WorkLog({ messages, live = false }: { messages: Message[]; live?: boolean }) {
+  const { open } = useContextMenu();
   const errors = messages.filter((m) => toolMeta(m).isError).length;
   const [expanded, setExpanded] = useState(errors > 0 || live);
   const duration = messages[messages.length - 1].created_at - messages[0].created_at;
   const tr = useT();
+  const logText = messages.map((m) => m.content).filter(Boolean).join("\n");
+  const onLogMenu = (e: React.MouseEvent) =>
+    open(
+      e,
+      <>
+        <MenuItem onClick={() => copyText(logText || messages.map((m) => toolLabel(m, tr)).join("\n"))}>
+          {tr("msg.copy")}
+        </MenuItem>
+        {messages.length > 1 ? (
+          <MenuItem onClick={() => setExpanded((v) => !v)}>
+            {expanded ? tr("msg.collapseLog") : tr("msg.expandLog")}
+          </MenuItem>
+        ) : null}
+      </>,
+    );
 
   useEffect(() => {
     if (errors > 0 || live) setExpanded(true);
@@ -323,14 +409,17 @@ export function WorkLog({ messages, live = false }: { messages: Message[]; live?
   // 单步不套折叠头：直接一行，避免多点一次
   if (messages.length === 1) {
     return (
-      <div style={workLogSingle}>
+      <div style={workLogSingle} onContextMenu={onLogMenu}>
         <WorkStep message={messages[0]} />
       </div>
     );
   }
 
   return (
-    <div style={{ ...workLog, borderColor: errors > 0 ? "#5b2b2b" : "var(--border-subtle)" }}>
+    <div
+      style={{ ...workLog, borderColor: errors > 0 ? "#5b2b2b" : "var(--border-subtle)" }}
+      onContextMenu={onLogMenu}
+    >
       <button className="work-head" style={workHead} onClick={() => setExpanded((v) => !v)} aria-expanded={expanded}>
         <span style={{ ...chevron, transform: expanded ? "rotate(90deg)" : "none" }}>
           <ChevronRight size={13} />

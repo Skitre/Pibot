@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 import type { Bot, Group, Routine } from "../types";
 import { api } from "../api";
 import { useStore } from "../store";
@@ -6,6 +6,7 @@ import { MoreIcon, CloseIcon, PlayIcon, TrashIcon } from "./icons";
 import { BotAvatar } from "./BotAvatar";
 import { askConfirm } from "../prefs";
 import { useT } from "../i18n";
+import { isNativeContextTarget, MenuItem, MenuSep, useContextMenu } from "./ContextMenu";
 
 interface Props {
   bot?: Bot | null;
@@ -29,8 +30,8 @@ export function ComputerPanel({ bot, group, onClose }: Props) {
   const [computerStartFailed, setComputerStartFailed] = useState(false);
   const [computerRestartFailed, setComputerRestartFailed] = useState(false);
   const [computerStopFailed, setComputerStopFailed] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  const { open, openAt, close } = useContextMenu();
   const tr = useT();
   const screenPort = botScreenPort(computer, screenBot, bots, members);
   const url = screenPort ? `http://${location.hostname}:${screenPort}/` : null;
@@ -50,18 +51,6 @@ export function ComputerPanel({ bot, group, onClose }: Props) {
     api.routines(bot.id).then((r) => setRoutines(r.routines));
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- refetch only when the selected bot changes
   }, [bot?.id]);
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    const onDown = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
-    };
-    const t = setTimeout(() => document.addEventListener("mousedown", onDown), 0);
-    return () => {
-      clearTimeout(t);
-      document.removeEventListener("mousedown", onDown);
-    };
-  }, [menuOpen]);
 
   const online = computer?.status === "online";
   const computerStarting = computer?.status === "starting";
@@ -90,7 +79,6 @@ export function ComputerPanel({ bot, group, onClose }: Props) {
   };
 
   const restartComputer = async () => {
-    setMenuOpen(false);
     if (computerStarting) return;
     if (!askConfirm(tr("computer.restartConfirm"))) return;
     setComputerStartFailed(false);
@@ -104,7 +92,6 @@ export function ComputerPanel({ bot, group, onClose }: Props) {
   };
 
   const stopComputer = async () => {
-    setMenuOpen(false);
     if (!online || computerStarting) return;
     if (!askConfirm(tr("computer.stopConfirm"))) return;
     setComputerStartFailed(false);
@@ -117,9 +104,47 @@ export function ComputerPanel({ bot, group, onClose }: Props) {
     }
   };
 
+  const chromeMenu = () => (
+    <>
+      <MenuItem
+        disabled={!online || !url}
+        onClick={() => {
+          if (url) setExpanded(true);
+        }}
+      >
+        {tr("computer.fullscreen")}
+      </MenuItem>
+      <MenuItem disabled={computerStarting} onClick={() => void restartComputer()}>
+        {tr("computer.restart")}
+      </MenuItem>
+      <MenuItem danger disabled={!online || computerStarting} onClick={() => void stopComputer()}>
+        {tr("computer.stop")}
+      </MenuItem>
+      <MenuSep />
+      <MenuItem onClick={onClose}>{tr("computer.closePanel")}</MenuItem>
+    </>
+  );
+
+  const onChromeMenu = (e: MouseEvent) => {
+    if (isNativeContextTarget(e.target)) return;
+    if ((e.target as HTMLElement).closest("iframe")) return;
+    open(e, chromeMenu());
+  };
+
+  const toggleDots = (el: HTMLElement) => {
+    if (menuFor === "dots") {
+      close();
+      setMenuFor(null);
+      return;
+    }
+    const r = el.getBoundingClientRect();
+    setMenuFor("dots");
+    openAt(r.right - 8, r.bottom + 4, chromeMenu(), { onClose: () => setMenuFor(null) });
+  };
+
   if (expanded && url) {
     return (
-      <div style={fullOverlay}>
+      <div style={fullOverlay} onContextMenu={onChromeMenu}>
         <div style={fullBar}>
           <span style={{ fontSize: 13, fontWeight: 600 }}>{screenTitle}</span>
           {group && members.length > 1 && (
@@ -130,6 +155,9 @@ export function ComputerPanel({ bot, group, onClose }: Props) {
                   style={fullPickerBtn(row.id === screenBot?.id)}
                   title={tr("computer.botScreen", { name: row.name })}
                   onClick={() => pickScreen(row.id)}
+                  onContextMenu={(e) =>
+                    open(e, <MenuItem onClick={() => pickScreen(row.id)}>{tr("computer.watchScreen")}</MenuItem>)
+                  }
                 >
                   <BotAvatar
                     id={row.id}
@@ -152,46 +180,20 @@ export function ComputerPanel({ bot, group, onClose }: Props) {
   }
 
   return (
-    <div style={panel}>
+    <div style={panel} onContextMenu={onChromeMenu}>
       <div style={panelHeader}>
         <span />
         <div style={{ display: "flex", gap: 4 }}>
-          <div ref={menuRef} style={{ position: "relative" }}>
-            <button
-              style={iconBtn}
-              title={tr("computer.settings")}
-              onClick={() => setMenuOpen((v) => !v)}
-            >
-              <MoreIcon size={15} />
-            </button>
-            {menuOpen && (
-              <div style={settingsMenu}>
-                <button
-                  style={{
-                    ...settingsMenuItem,
-                    opacity: computerStarting ? 0.4 : 1,
-                    cursor: computerStarting ? "default" : "pointer",
-                  }}
-                  disabled={computerStarting}
-                  onClick={restartComputer}
-                >
-                  {tr("computer.restart")}
-                </button>
-                <button
-                  style={{
-                    ...settingsMenuItem,
-                    color: online && !computerStarting ? "#ef4444" : "var(--text-secondary)",
-                    opacity: online && !computerStarting ? 1 : 0.4,
-                    cursor: online && !computerStarting ? "pointer" : "default",
-                  }}
-                  disabled={!online || computerStarting}
-                  onClick={stopComputer}
-                >
-                  {tr("computer.stop")}
-                </button>
-              </div>
-            )}
-          </div>
+          <button
+            style={iconBtn}
+            title={tr("computer.settings")}
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleDots(e.currentTarget);
+            }}
+          >
+            <MoreIcon size={15} />
+          </button>
           <button style={iconBtn} onClick={onClose} title={tr("computer.closePanel")}>
             <CloseIcon />
           </button>
@@ -245,6 +247,9 @@ export function ComputerPanel({ bot, group, onClose }: Props) {
                 key={row.id}
                 style={pickerRow(selected)}
                 onClick={() => pickScreen(row.id)}
+                onContextMenu={(e) =>
+                  open(e, <MenuItem onClick={() => pickScreen(row.id)}>{tr("computer.watchScreen")}</MenuItem>)
+                }
               >
                 <BotAvatar id={row.id} color={row.avatar_color} size={26} working={busy} />
                 <span style={pickerName}>{row.name}</span>
@@ -258,7 +263,7 @@ export function ComputerPanel({ bot, group, onClose }: Props) {
       {bot && (
       <div style={routinesSection}>
         {routines.length === 0 && !creating && (
-          <div style={routinesEmpty}>Routines are recurring tasks this agent runs on a schedule.</div>
+          <div style={routinesEmpty}>{tr("computer.routinesEmpty")}</div>
         )}
         {routines.map((r) => (
           <RoutineRow key={r.id} routine={r} onChange={() => api.routines(bot.id).then((x) => setRoutines(x.routines))} />
@@ -273,7 +278,7 @@ export function ComputerPanel({ bot, group, onClose }: Props) {
           />
         ) : (
           <button style={createBtn} onClick={() => setCreating(true)}>
-            Create Routine
+            {tr("computer.createRoutine")}
           </button>
         )}
       </div>
@@ -312,36 +317,59 @@ function botScreenPort(
 
 function RoutineRow({ routine, onChange }: { routine: Routine; onChange: () => void }) {
   const [ran, setRan] = useState(false);
+  const { open } = useContextMenu();
+  const tr = useT();
+  const runNow = async () => {
+    setRan(true);
+    await api.runRoutine(routine.id);
+    setTimeout(() => setRan(false), 2000);
+    onChange();
+  };
+  const remove = async () => {
+    if (!askConfirm(tr("computer.deleteRoutineConfirm", { name: routine.name }))) return;
+    await api.deleteRoutine(routine.id);
+    onChange();
+  };
   return (
-    <div style={routineRow}>
+    <div
+      style={routineRow}
+      onContextMenu={(e) =>
+        open(
+          e,
+          <>
+            <MenuItem onClick={() => void runNow()}>{tr("computer.runNow")}</MenuItem>
+            <MenuItem
+              onClick={() => void api.toggleRoutine(routine.id, !routine.enabled).then(onChange)}
+            >
+              {routine.enabled ? tr("computer.disableRoutine") : tr("computer.enableRoutine")}
+            </MenuItem>
+            <MenuSep />
+            <MenuItem danger onClick={() => void remove()}>
+              {tr("computer.deleteRoutine")}
+            </MenuItem>
+          </>,
+        )
+      }
+    >
       <div style={{ minWidth: 0, flex: 1 }}>
         <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {routine.name}
         </div>
         <div style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>
-          {ran ? "Running now…" : routine.cron}
+          {ran ? tr("computer.runningNow") : routine.cron}
         </div>
       </div>
       <button
         style={routineBtn}
-        title="Run now"
-        onClick={async () => {
-          setRan(true);
-          await api.runRoutine(routine.id);
-          setTimeout(() => setRan(false), 2000);
-          onChange();
-        }}
+        title={tr("computer.runNow")}
+        onClick={() => void runNow()}
       >
         <PlayIcon size={12} color="var(--text-secondary)" />
       </button>
       <button
         style={routineBtn}
-        title="Delete routine"
-        onClick={async () => {
-          if (!confirm(`Delete routine "${routine.name}"?`)) return;
-          await api.deleteRoutine(routine.id);
-          onChange();
-        }}
+        title={tr("computer.deleteRoutine")}
+        onClick={() => void remove()}
       >
         <TrashIcon size={13} color="var(--text-secondary)" />
       </button>
@@ -360,11 +388,12 @@ function RoutineForm({ botId, onDone }: { botId: string; onDone: () => void }) {
   const [name, setName] = useState("");
   const [cron, setCron] = useState("0 9 * * *");
   const [prompt, setPrompt] = useState("");
+  const tr = useT();
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
-      <input style={formInput} placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} />
-      <input style={formInput} placeholder="Cron (e.g. 0 9 * * *)" value={cron} onChange={(e) => setCron(e.target.value)} />
-      <textarea style={{ ...formInput, minHeight: 54, resize: "vertical" }} placeholder="Task to run" value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+      <input style={formInput} placeholder={tr("computer.formName")} value={name} onChange={(e) => setName(e.target.value)} />
+      <input style={formInput} placeholder={tr("computer.formCron")} value={cron} onChange={(e) => setCron(e.target.value)} />
+      <textarea style={{ ...formInput, minHeight: 54, resize: "vertical" }} placeholder={tr("computer.formTask")} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
       <div style={{ display: "flex", gap: 6 }}>
         <button
           style={createBtn}
@@ -374,10 +403,10 @@ function RoutineForm({ botId, onDone }: { botId: string; onDone: () => void }) {
             onDone();
           }}
         >
-          Save
+          {tr("computer.save")}
         </button>
         <button style={{ ...createBtn, background: "transparent" }} onClick={onDone}>
-          Cancel
+          {tr("computer.cancel")}
         </button>
       </div>
     </div>
@@ -407,27 +436,6 @@ const iconBtn: React.CSSProperties = {
   display: "grid",
   placeItems: "center",
   color: "var(--text-secondary)",
-};
-const settingsMenu: React.CSSProperties = {
-  position: "absolute",
-  top: 34,
-  right: 0,
-  zIndex: 30,
-  minWidth: 170,
-  background: "var(--bg-elevated)",
-  border: "1px solid var(--border-subtle)",
-  borderRadius: 10,
-  padding: 4,
-  boxShadow: "var(--shadow)",
-};
-const settingsMenuItem: React.CSSProperties = {
-  display: "block",
-  width: "100%",
-  textAlign: "left",
-  fontSize: 13,
-  padding: "8px 10px",
-  borderRadius: 7,
-  color: "var(--text-primary)",
 };
 const thumb: React.CSSProperties = {
   width: "100%",

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import type { Bot, Group } from "../types";
 import { BotAvatar } from "./BotAvatar";
 import { GroupCluster, resolveGroupMembers } from "./GroupCluster";
@@ -14,6 +14,7 @@ import { api } from "../api";
 import { store, useStore } from "../store";
 import { askConfirm } from "../prefs";
 import { useT } from "../i18n";
+import { findTextField, MenuItem, MenuSep, useContextMenu } from "./ContextMenu";
 
 export type Selection = { kind: "bot" | "group"; id: string } | null;
 
@@ -46,8 +47,8 @@ export function Sidebar({
 }: Props) {
   const [query, setQuery] = useState("");
   const [showHidden, setShowHidden] = useState(false);
-  const [addMenu, setAddMenu] = useState(false);
   const [menuFor, setMenuFor] = useState<string | null>(null);
+  const { open, openAt, close } = useContextMenu();
   const unread = useStore((s) => s.unread);
   const groupUnread = useStore((s) => s.groupUnread);
   const groupRunning = useStore((s) => s.groupRunning);
@@ -67,38 +68,124 @@ export function Sidebar({
     (a, b) => (b.last_activity || b.created_at) - (a.last_activity || a.created_at),
   );
 
+  const blankMenu = () => (
+    <>
+      <MenuItem onClick={onNewBot}>{tr("sidebar.newBot")}</MenuItem>
+      <MenuItem disabled={bots.length < 2} onClick={onNewGroup}>
+        {tr("sidebar.newThread")}
+      </MenuItem>
+      {hiddenCount > 0 && (
+        <MenuItem onClick={() => setShowHidden((v) => !v)}>
+          {showHidden ? tr("sidebar.hideHidden") : tr("sidebar.showHidden")}
+        </MenuItem>
+      )}
+    </>
+  );
+
+  const groupMenu = (g: Group) => (
+    <>
+      <MenuItem
+        onClick={() => {
+          onSelect({ kind: "group", id: g.id });
+          onEditGroup(g);
+        }}
+      >
+        {tr("sidebar.editThread")}
+      </MenuItem>
+      {!!groupUnread[g.id] && (
+        <MenuItem onClick={() => store.markGroupRead(g.id)}>{tr("sidebar.markRead")}</MenuItem>
+      )}
+      <MenuSep />
+      <MenuItem
+        danger
+        onClick={() => {
+          if (askConfirm(tr("sidebar.deleteThreadConfirm", { name: g.name }))) {
+            api.deleteGroup(g.id);
+          }
+        }}
+      >
+        {tr("sidebar.deleteThread")}
+      </MenuItem>
+    </>
+  );
+
+  const botMenu = (b: Bot) => (
+    <>
+      <MenuItem onClick={() => onEditBot(b)}>{tr("sidebar.editBot")}</MenuItem>
+      <MenuItem onClick={() => onOpenMemory(b)}>{tr("sidebar.memory")}</MenuItem>
+      <MenuItem onClick={() => store.markRead(b.id, !!unread[b.id])}>
+        {unread[b.id] ? tr("sidebar.markRead") : tr("sidebar.markUnread")}
+      </MenuItem>
+      <MenuItem onClick={() => void api.duplicateBot(b.id)}>{tr("sidebar.duplicate")}</MenuItem>
+      <MenuItem onClick={() => api.pinBot(b.id, !b.pinned)}>
+        {b.pinned ? tr("sidebar.unpin") : tr("sidebar.pin")}
+      </MenuItem>
+      <MenuItem onClick={() => api.hideBot(b.id, !b.hidden)}>
+        {b.hidden ? tr("sidebar.unhide") : tr("sidebar.hide")}
+      </MenuItem>
+      {b.status === "stopped" ? (
+        <MenuItem onClick={() => api.startBot(b.id)}>{tr("sidebar.wake")}</MenuItem>
+      ) : (
+        <MenuItem onClick={() => api.stopBot(b.id)}>{tr("sidebar.sleep")}</MenuItem>
+      )}
+      <MenuSep />
+      <MenuItem
+        onClick={() => {
+          if (askConfirm(tr("sidebar.clearChatConfirm", { name: b.name }))) {
+            api.clearMessages(b.id);
+          }
+        }}
+      >
+        {tr("sidebar.clearChat")}
+      </MenuItem>
+      <MenuItem
+        danger
+        onClick={() => {
+          if (askConfirm(tr("sidebar.deleteBotConfirm", { name: b.name }))) {
+            api.deleteBot(b.id);
+          }
+        }}
+      >
+        {tr("sidebar.deleteBot")}
+      </MenuItem>
+    </>
+  );
+
+  const toggleAnchored = (id: string, el: HTMLElement, content: React.ReactNode) => {
+    if (menuFor === id) {
+      close();
+      setMenuFor(null);
+      return;
+    }
+    const r = el.getBoundingClientRect();
+    setMenuFor(id);
+    openAt(r.right - 8, r.bottom + 4, content, { onClose: () => setMenuFor(null) });
+  };
+
   return (
-    <div style={S.root}>
+    <div
+      style={S.root}
+      onContextMenu={(e) => {
+        if (findTextField(e.target)) return;
+        open(e, blankMenu());
+      }}
+    >
       <div style={S.topbar}>
         <div style={{ position: "relative" }}>
-          <button style={S.iconBtn} onClick={() => setAddMenu((v) => !v)} title={tr("sidebar.new")}>
+          <button
+            style={S.iconBtn}
+            title={tr("sidebar.new")}
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleAnchored("add", e.currentTarget, blankMenu());
+            }}
+          >
             <PlusIcon size={18} />
           </button>
-          {addMenu && (
-            <Menu onClose={() => setAddMenu(false)} align="right">
-              <MenuItem
-                onClick={() => {
-                  setAddMenu(false);
-                  onNewBot();
-                }}
-              >
-                {tr("sidebar.newBot")}
-              </MenuItem>
-              <MenuItem
-                disabled={bots.length < 2}
-                onClick={() => {
-                  setAddMenu(false);
-                  onNewGroup();
-                }}
-              >
-                {tr("sidebar.newThread")}
-              </MenuItem>
-            </Menu>
-          )}
         </div>
       </div>
 
-      <div style={S.searchWrap}>
+      <div style={S.searchWrap} data-edit-field="">
         <span style={S.searchIcon}>
           <SearchIcon />
         </span>
@@ -120,7 +207,15 @@ export function Sidebar({
             );
           const unseen = !!groupUnread[g.id];
           return (
-            <div key={g.id} className="side-row" style={{ position: "relative" }}>
+            <div
+              key={g.id}
+              className="side-row"
+              style={{ position: "relative" }}
+              onContextMenu={(e) => {
+                onSelect({ kind: "group", id: g.id });
+                open(e, groupMenu(g));
+              }}
+            >
               <button
                 className="side-item"
                 style={{ ...S.item, ...(active ? S.itemActive : {}) }}
@@ -157,35 +252,13 @@ export function Sidebar({
                 style={S.moreBtn}
                 onClick={(e) => {
                   e.stopPropagation();
-                  setMenuFor(menuFor === g.id ? null : g.id);
+                  onSelect({ kind: "group", id: g.id });
+                  toggleAnchored(g.id, e.currentTarget, groupMenu(g));
                 }}
                 title={tr("sidebar.options")}
               >
                 <MoreIcon />
               </button>
-              {menuFor === g.id && (
-                <Menu onClose={() => setMenuFor(null)} align="right" top={44}>
-                  <MenuItem
-                    onClick={() => {
-                      setMenuFor(null);
-                      onEditGroup(g);
-                    }}
-                  >
-                    {tr("sidebar.editThread")}
-                  </MenuItem>
-                  <MenuItem
-                    danger
-                    onClick={() => {
-                      if (askConfirm(tr("sidebar.deleteThreadConfirm", { name: g.name }))) {
-                        api.deleteGroup(g.id);
-                      }
-                      setMenuFor(null);
-                    }}
-                  >
-                    {tr("sidebar.deleteThread")}
-                  </MenuItem>
-                </Menu>
-              )}
             </div>
           );
         })}
@@ -197,7 +270,15 @@ export function Sidebar({
           );
           const botBusy = !!working[b.id] || inGroupRun;
           return (
-            <div key={b.id} className="side-row" style={{ position: "relative" }}>
+            <div
+              key={b.id}
+              className="side-row"
+              style={{ position: "relative" }}
+              onContextMenu={(e) => {
+                onSelect({ kind: "bot", id: b.id });
+                open(e, botMenu(b));
+              }}
+            >
               <button
                 className="side-item"
                 style={{ ...S.item, ...(active ? S.itemActive : {}) }}
@@ -246,79 +327,13 @@ export function Sidebar({
                 style={S.moreBtn}
                 onClick={(e) => {
                   e.stopPropagation();
-                  setMenuFor(menuFor === b.id ? null : b.id);
+                  onSelect({ kind: "bot", id: b.id });
+                  toggleAnchored(b.id, e.currentTarget, botMenu(b));
                 }}
                 title={tr("sidebar.options")}
               >
                 <MoreIcon />
               </button>
-              {menuFor === b.id && (
-                <Menu onClose={() => setMenuFor(null)} align="right" top={44}>
-                  <MenuItem
-                    onClick={() => {
-                      setMenuFor(null);
-                      onEditBot(b);
-                    }}
-                  >
-                    {tr("sidebar.editBot")}
-                  </MenuItem>
-                  <MenuItem
-                    onClick={() => {
-                      setMenuFor(null);
-                      onOpenMemory(b);
-                    }}
-                  >
-                    {tr("sidebar.memory")}
-                  </MenuItem>
-                  <MenuItem
-                    onClick={() => {
-                      store.markRead(b.id, !!unread[b.id]);
-                      setMenuFor(null);
-                    }}
-                  >
-                    {unread[b.id] ? tr("sidebar.markRead") : tr("sidebar.markUnread")}
-                  </MenuItem>
-                  <MenuItem
-                    onClick={async () => {
-                      setMenuFor(null);
-                      await api.duplicateBot(b.id);
-                    }}
-                  >
-                    {tr("sidebar.duplicate")}
-                  </MenuItem>
-                  <MenuItem onClick={() => api.pinBot(b.id, !b.pinned)}>
-                    {b.pinned ? tr("sidebar.unpin") : tr("sidebar.pin")}
-                  </MenuItem>
-                  <MenuItem onClick={() => api.hideBot(b.id, !b.hidden)}>
-                    {b.hidden ? tr("sidebar.unhide") : tr("sidebar.hide")}
-                  </MenuItem>
-                  {b.status === "stopped" ? (
-                    <MenuItem onClick={() => api.startBot(b.id)}>{tr("sidebar.wake")}</MenuItem>
-                  ) : (
-                    <MenuItem onClick={() => api.stopBot(b.id)}>{tr("sidebar.sleep")}</MenuItem>
-                  )}
-                  <MenuItem
-                    onClick={() => {
-                      setMenuFor(null);
-                      if (askConfirm(tr("sidebar.clearChatConfirm", { name: b.name }))) {
-                        api.clearMessages(b.id);
-                      }
-                    }}
-                  >
-                    {tr("sidebar.clearChat")}
-                  </MenuItem>
-                  <MenuItem
-                    danger
-                    onClick={() => {
-                      if (askConfirm(tr("sidebar.deleteBotConfirm", { name: b.name }))) {
-                        api.deleteBot(b.id);
-                      }
-                    }}
-                  >
-                    {tr("sidebar.deleteBot")}
-                  </MenuItem>
-                </Menu>
-              )}
             </div>
           );
         })}
@@ -345,71 +360,6 @@ export function Sidebar({
         </button>
       </div>
     </div>
-  );
-}
-
-function Menu({
-  children,
-  onClose,
-  align,
-  top,
-}: {
-  children: React.ReactNode;
-  onClose: () => void;
-  align: "left" | "right";
-  top?: number;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
-    };
-    // 延迟一帧挂载，避免触发菜单的那次点击立即关闭它
-    const t = setTimeout(() => document.addEventListener("mousedown", onDown), 0);
-    return () => {
-      clearTimeout(t);
-      document.removeEventListener("mousedown", onDown);
-    };
-  }, [onClose]);
-
-  return (
-    <div
-      ref={ref}
-      style={{
-        ...S.menu,
-        top: top ?? 34,
-        ...(align === "right" ? { right: 0 } : { left: 0 }),
-      }}
-    >
-      {children}
-    </div>
-  );
-}
-
-function MenuItem({
-  children,
-  onClick,
-  danger,
-  disabled,
-}: {
-  children: React.ReactNode;
-  onClick: () => void;
-  danger?: boolean;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      style={{
-        ...S.menuItem,
-        color: danger ? "#ef4444" : "var(--text-primary)",
-        opacity: disabled ? 0.4 : 1,
-        cursor: disabled ? "default" : "pointer",
-      }}
-      disabled={disabled}
-      onClick={onClick}
-    >
-      {children}
-    </button>
   );
 }
 
@@ -518,25 +468,6 @@ const S: Record<string, React.CSSProperties> = {
     placeItems: "center",
     color: "var(--text-secondary)",
     background: "var(--bg-active)",
-  },
-  menu: {
-    position: "absolute",
-    zIndex: 30,
-    minWidth: 170,
-    background: "var(--bg-elevated)",
-    border: "1px solid var(--border-subtle)",
-    borderRadius: 10,
-    padding: 4,
-    boxShadow: "var(--shadow)",
-    animation: "fade-up 0.12s ease",
-  },
-  menuItem: {
-    display: "block",
-    width: "100%",
-    textAlign: "left",
-    fontSize: 13,
-    padding: "8px 10px",
-    borderRadius: 7,
   },
   empty: { padding: "24px 14px", fontSize: 12.5, color: "var(--text-placeholder)", lineHeight: 1.5 },
   hiddenRow: {
