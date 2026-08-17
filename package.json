@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "description": "Local-first multi-bot AI workspace with host-side pi-sdk agents and one shared Docker desktop",
+  "license": "MIT",
   "workspaces": [
     "server",
     "web"

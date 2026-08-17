@@ -118,3 +118,11 @@ Auto 策略会放行 MCP 标注的只读工具，写入或未知工具会在聊�
 - 容器内的脚本必须是 LF 行尾（仓库已通过 `.gitattributes` 约束，镜像构建时也会再规范化一次）。
 - 模型不通时，Bot 不会沉默：失败原因会作为系统消息显示在会话里
   （例如 `No API key found` 或 `Connection error.`），据此排查中转配置。
+
+## 友情链接
+
+- **[Linux DO](https://linux.do/)** — Linux DO：学AI，上L站！
+
+## 许可证
+
+本项目采用 [MIT License](LICENSE)。
